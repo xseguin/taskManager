@@ -32,7 +32,7 @@ class ConversationStore:
                 (self._max,),
             ).fetchall()
         msgs = [{"role": r, "content": c} for r, c, at in reversed(rows)
-                if datetime.fromisoformat(at) >= datetime.fromisoformat(since)]
+                if c.strip() and datetime.fromisoformat(at) >= datetime.fromisoformat(since)]
         while msgs and msgs[0]["role"] != "user":
             msgs.pop(0)
         return msgs

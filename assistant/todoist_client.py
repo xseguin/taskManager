@@ -109,8 +109,11 @@ class TodoistClient:
             parts.append(f"#{project}")
         if due_filter:
             parts.append(f"({due_filter})")
-        q = " & ".join(parts) or "all"
-        tasks = self._call(lambda: _flatten(self._api.filter_tasks(query=q)))
+        if parts:
+            q = " & ".join(parts)
+            tasks = self._call(lambda: _flatten(self._api.filter_tasks(query=q)))
+        else:
+            tasks = self._call(lambda: _flatten(self._api.get_tasks()))
         return [self._to_task(t) for t in tasks]
 
     def get_task(self, task_id: str) -> Task | None:

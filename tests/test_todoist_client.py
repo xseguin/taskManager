@@ -79,3 +79,9 @@ def test_fake_todoist_contract():
     assert t.get_task(task.id).is_completed
     with pytest.raises(TaskNotFound):
         t.complete_task("gone")
+
+
+def test_client_search_without_criteria_lists_active_tasks(client):
+    client._api.get_tasks.return_value = iter([[_sdk_task()]])
+    assert len(client.search_tasks()) == 1
+    client._api.filter_tasks.assert_not_called()

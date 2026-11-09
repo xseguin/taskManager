@@ -71,7 +71,8 @@ class Controller:
             case "retry":
                 return self._after_execute(self._executor.execute(arg, retry=True), arg, message_id)
             case "cancel":
-                if not self._store.transition(arg, {ProposalStatus.PENDING}, ProposalStatus.CANCELLED):
+                if not self._store.transition(arg, {ProposalStatus.PENDING, ProposalStatus.EDITING},
+                                              ProposalStatus.CANCELLED):
                     return self._refused(arg, message_id)
                 return [Reply(render_results(self._store.get(arg)), edit_message_id=message_id)]
             case "edit":
@@ -117,8 +118,15 @@ class Controller:
             log.error("erreur Anthropic : %s", e)
             key = self._remember("text", text, key)
             return [Reply("⚠️ Claude ne répond pas.", [Button("🔁 Réessayer", f"again:{key}")])]
+        except Exception:
+            log.exception("erreur inattendue pendant le traitement")
+            key = self._remember("text", text, key)
+            return [Reply("⚠️ Erreur inattendue.", [Button("🔁 Réessayer", f"again:{key}")])]
         if key:
             self._retry_inputs.pop(key, None)
+        if editing is not None and not isinstance(result, (ProposalDraft, Clarification)):
+            # la réponse n'est pas une correction : on quitte le mode édition
+            self._store.transition(editing.id, {ProposalStatus.EDITING}, ProposalStatus.PENDING)
         match result:
             case ProposalDraft(actions):
                 replies = []

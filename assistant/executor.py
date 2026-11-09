@@ -51,6 +51,11 @@ class Executor:
                 results.append(ActionResult(index=i, ok=False, task_id=a.task_id,
                                error=f"erreur Todoist : {e}"))
                 break
+            except Exception as e:  # ne jamais laisser la proposition bloquée en « executing »
+                log.exception("erreur inattendue sur l'action %d de %s", i, proposal_id)
+                results.append(ActionResult(index=i, ok=False, task_id=a.task_id,
+                               error=f"erreur inattendue : {e}"))
+                break
         ok = len(results) == len(p.actions) and all(r.ok for r in results)
         return self._store.save_results(
             proposal_id, results, ProposalStatus.DONE if ok else ProposalStatus.PARTIAL)

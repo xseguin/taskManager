@@ -121,3 +121,19 @@ def test_editing_includes_original_proposal(agent_factory, store):
     agent_factory(claude).run("plutôt vendredi", editing=p)
     sent = claude.calls[0]["messages"][-1]["content"]
     assert "Devis Paul" in sent and "plutôt vendredi" in sent
+
+
+def test_empty_answer_gets_placeholder_and_history_stays_valid(agent_factory, conversation):
+    claude = FakeClaude([response(), response(text("ok"))])
+    agent = agent_factory(claude)
+    assert agent.run("x") == Answer("…")
+    agent.run("y")
+    assert all(m["content"] for m in claude.calls[1]["messages"])
+
+
+def test_todoist_outage_during_validation_does_not_escape(agent_factory, fake_todoist):
+    from assistant.todoist_client import TodoistError
+    fake_todoist.fail_on["get_task"] = TodoistError("HTTP 503")
+    bad = response(tool_use("propose_complete_task", {"task_id": "t1"}))
+    res = agent_factory(FakeClaude([bad, bad])).run("x")
+    assert isinstance(res, AgentFailure) and "503" in res.message

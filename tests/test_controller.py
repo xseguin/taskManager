@@ -149,3 +149,35 @@ def test_partial_offers_retry_remaining(ctl, fake_claude, fake_todoist):
 
 def test_unknown_callback(ctl):
     assert ctl.handle_callback(ME, "nimportequoi", 1)[0].text == EXPIRED
+
+
+def test_cancel_while_editing(ctl, fake_claude, store):
+    pid = _propose(ctl, fake_claude)
+    ctl.handle_callback(ME, f"edit:{pid}", 10)
+    r = ctl.handle_callback(ME, f"cancel:{pid}", 10)
+    assert r[0].text.startswith("❌ Annulé") and store.get(pid).status == ProposalStatus.CANCELLED
+
+
+def test_non_proposal_reply_while_editing_leaves_edit_mode(ctl, fake_claude, store):
+    pid = _propose(ctl, fake_claude)
+    ctl.handle_callback(ME, f"edit:{pid}", 10)
+    fake_claude.push(response(text("Je ne gère que tes tâches.")))
+    ctl.handle_text(ME, "quelle heure est-il ?")
+    assert store.get(pid).status == ProposalStatus.PENDING
+    fake_claude.push(response(tool_use("propose_create_task", {"content": "Pain"})))
+    ctl.handle_text(ME, "ajoute pain")
+    assert "Modification demandée" not in fake_claude.calls[-1]["messages"][-1]["content"]
+
+
+def test_clarification_while_editing_keeps_edit_mode(ctl, fake_claude, store):
+    pid = _propose(ctl, fake_claude)
+    ctl.handle_callback(ME, f"edit:{pid}", 10)
+    fake_claude.push(response(tool_use("ask_clarification", {"question": "Quel jour ?"})))
+    ctl.handle_text(ME, "change la date")
+    assert store.get(pid).status == ProposalStatus.EDITING
+
+
+def test_unexpected_error_is_reported_with_retry(ctl, fake_claude):
+    fake_claude.push(RuntimeError("bug"))
+    r = ctl.handle_text(ME, "x")
+    assert r[0].text == "⚠️ Erreur inattendue." and r[0].buttons[0].data.startswith("again:")

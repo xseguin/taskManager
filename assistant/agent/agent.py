@@ -136,5 +136,5 @@ class Agent:
                     {"role": "assistant", "content": [_block_to_dict(b) for b in r.content]},
                     {"role": "user", "content": results}]
                 continue
-            return Answer("".join(b.text for b in r.content if b.type == "text").strip())
+            return Answer("".join(b.text for b in r.content if b.type == "text").strip() or "…")
         return AgentFailure(TOO_COMPLEX)

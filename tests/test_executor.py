@@ -67,3 +67,10 @@ def test_update_complete_reopen_delete(executor, store, fake_todoist):
                       Action(kind="delete", task_id=t.id)], "x")
     assert executor.execute(p.id).status == ProposalStatus.DONE
     assert fake_todoist.tasks == {}
+
+
+def test_unexpected_exception_marks_partial_not_stuck(executor, store, fake_todoist):
+    fake_todoist.fail_on["create_task"] = TypeError("réponse malformée")
+    p = store.create([Action(kind="create", content="A")], "x")
+    r = executor.execute(p.id)
+    assert r.status == ProposalStatus.PARTIAL and "malformée" in r.results[0].error

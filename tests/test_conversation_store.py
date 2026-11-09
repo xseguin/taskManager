@@ -28,3 +28,10 @@ def test_clear(conv):
     conv.add("user", "x")
     conv.clear()
     assert conv.recent() == []
+
+
+def test_recent_skips_empty_rows(conv):
+    conv.add("user", "a")
+    conv.add("assistant", "")
+    conv.add("user", "b")
+    assert all(m["content"] for m in conv.recent())
