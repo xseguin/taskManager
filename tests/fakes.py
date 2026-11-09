@@ -105,3 +105,43 @@ class FakeTranscriber:
         if isinstance(r, Exception):
             raise r
         return r
+
+
+# --- Faux Claude ---------------------------------------------------------
+from types import SimpleNamespace  # noqa: E402
+from uuid import uuid4  # noqa: E402
+
+
+def tool_use(name: str, input: dict, id: str | None = None):
+    return SimpleNamespace(type="tool_use", name=name, input=input, id=id or f"tu_{uuid4().hex[:8]}")
+
+
+def text(s: str):
+    return SimpleNamespace(type="text", text=s)
+
+
+def response(*blocks):
+    stop = "tool_use" if any(b.type == "tool_use" for b in blocks) else "end_turn"
+    return SimpleNamespace(content=list(blocks), stop_reason=stop,
+                           usage=SimpleNamespace(input_tokens=100, output_tokens=20,
+                                                 cache_read_input_tokens=0,
+                                                 cache_creation_input_tokens=0))
+
+
+class FakeClaude:
+    """Imite client.messages.create ; une Exception dans la file est levée."""
+
+    def __init__(self, responses: list | None = None):
+        self.responses = list(responses or [])
+        self.calls: list[dict] = []
+        self.messages = SimpleNamespace(create=self._create)
+
+    def push(self, r) -> None:
+        self.responses.append(r)
+
+    def _create(self, **kw):
+        self.calls.append(kw)
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
