@@ -32,3 +32,15 @@ def clock(now) -> Clock:
 @pytest.fixture
 def db_path(tmp_path):
     return tmp_path / "t.db"
+
+
+@pytest.fixture
+def conn(db_path):
+    from assistant.db import connect
+    return connect(db_path)
+
+
+@pytest.fixture
+def store(conn, clock):
+    from assistant.pending_store import PendingStore
+    return PendingStore(conn, clock)
