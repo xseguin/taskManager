@@ -92,3 +92,16 @@ class FakeTodoist:
         self._tick("delete_task")
         self._require(task_id)
         del self.tasks[task_id]
+
+
+class FakeTranscriber:
+    def __init__(self, results: list | None = None):
+        self.results = list(results or [])
+        self.calls = 0
+
+    def transcribe(self, audio: bytes, filename: str) -> str:
+        self.calls += 1
+        r = self.results.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
