@@ -7,7 +7,7 @@ from assistant.hermes.relay import Relay
 from assistant.hermes.todoist_tools import ProposalFlow, TOOL_SCHEMAS, run_read_tool
 from assistant.models import ProposalStatus
 from assistant.todoist_client import TodoistError
-from tests.fakes import FakeInjector, FakeMessenger, FakeTodoist
+from tests.fakes import FakeMessenger, FakeTodoist
 
 
 @pytest.fixture
@@ -21,8 +21,8 @@ def messenger():
 
 
 @pytest.fixture
-def relay():
-    return Relay(("42",), FakeInjector())
+def relay(clock):
+    return Relay(("42",), clock)
 
 
 @pytest.fixture
@@ -137,3 +137,41 @@ def test_schemas():
     for name, s in TOOL_SCHEMAS.items():
         assert s["name"] == name and s["description"] and s["parameters"]["type"] == "object"
     assert TOOL_SCHEMAS["todoist_propose_actions"]["parameters"]["required"] == ["actions"]
+
+
+async def _armed(flow, relay):
+    pid = json.loads(await flow.propose({"actions": [{"kind": "create", "content": "Pain"}]}))["proposal_id"]
+    await flow.on_button("42", 1, "edit", pid)
+    return pid
+
+
+@pytest.mark.parametrize("verb", ["ok", "cancel"])
+async def test_terminal_click_drops_armed_edit(flow, relay, verb):
+    pid = await _armed(flow, relay)
+    await flow.on_button("42", 1, verb, pid)
+    assert relay.rewrite("42", "42", "plutôt vendredi") is None
+
+
+async def test_replacement_drops_armed_edit(flow, relay):
+    old = await _armed(flow, relay)
+    await flow.propose({"actions": [{"kind": "create", "content": "Pain 2"}], "replaces_proposal_id": old})
+    assert relay.rewrite("42", "42", "plutôt vendredi") is None
+
+
+async def test_replaces_proposal_id_must_be_a_string(flow, store, messenger):
+    out = json.loads(await flow.propose({"actions": [{"kind": "create", "content": "Pain"}],
+                                         "replaces_proposal_id": 12}))
+    assert "replaces_proposal_id" in out["error"]
+    assert messenger.sent == []
+
+
+async def test_failed_edit_of_old_card_keeps_new_proposal(flow, store, messenger):
+    old = json.loads(await flow.propose({"actions": [{"kind": "create", "content": "Pain"}]}))["proposal_id"]
+
+    async def boom(*a, **k):
+        raise RuntimeError("message to edit not found")
+    messenger.edit = boom
+    out = json.loads(await flow.propose({"actions": [{"kind": "create", "content": "Pain 2"}],
+                                         "replaces_proposal_id": old}))
+    assert out["status"] == "pending_user_validation"
+    assert store.get(old).status == ProposalStatus.REPLACED

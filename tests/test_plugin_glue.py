@@ -71,7 +71,7 @@ def test_register_wires_everything(fake_ctx, monkeypatch, tmp_path, token_path):
     register(fake_ctx)
     assert set(fake_ctx.tools) == {"todoist_list_projects", "todoist_search_tasks",
                                    "todoist_get_task", "todoist_propose_actions"}
-    assert {"pre_gateway_dispatch", "post_gateway_admission", "pre_command", "pre_llm_call"} <= set(fake_ctx.hooks)
+    assert set(fake_ctx.hooks) == {"pre_gateway_dispatch", "pre_llm_call"}
     assert fake_ctx.platform_handlers.keys() == {"telegram"}
     assert "todoist-assistant.rules" in fake_ctx.prompt_sections
 
@@ -98,9 +98,12 @@ def test_read_tool_never_raises(registered, monkeypatch):
     assert "kaboom" in out["error"]
 
 
-def _event(text, user_id="42", platform="telegram"):
-    return SimpleNamespace(text=text, source=SimpleNamespace(
-        platform=SimpleNamespace(value=platform), chat_id="42", user_id=user_id))
+def _event(text, user_id="42", platform="telegram", message_id="7", message_type="text",
+           chat_type="dm"):
+    return SimpleNamespace(text=text, message_id=message_id,
+                           message_type=SimpleNamespace(value=message_type),
+                           source=SimpleNamespace(platform=SimpleNamespace(value=platform), chat_id="42",
+                                                  user_id=user_id, chat_type=chat_type))
 
 
 def test_pre_gateway_dispatch_rewrites_t_command(registered):
@@ -109,18 +112,6 @@ def test_pre_gateway_dispatch_rewrites_t_command(registered):
     assert res == {"action": "rewrite", "text": "[Créer une tâche Todoist] acheter du pain"}
     assert hook(event=_event("/t pain", user_id="99"), gateway=None, session_store=None) is None
     assert hook(event=_event("/t pain", platform="discord"), gateway=None, session_store=None) is None
-
-
-def test_admission_then_injection_and_reset(registered):
-    admit = registered.hooks["post_gateway_admission"][0]
-    assert admit(session_key="agent:main:telegram:dm:42", platform="telegram",
-                 source={"chat_id": "42"}, message_id=1, text="hi") is None
-    pre_command = registered.hooks["pre_command"][0]
-    pre_command(surface="gateway", command="new", alias_used=None, args_raw="",
-                session_key="agent:main:telegram:dm:42", platform="telegram")
-    # Après /new, plus de tour humain : « ok » n'est pas armé, le hook de réécriture ne fait rien.
-    hook = registered.hooks["pre_gateway_dispatch"][0]
-    assert hook(event=_event("ok"), gateway=None, session_store=None) is None
 
 
 def test_pre_llm_call_without_loop_does_not_raise(registered):
@@ -216,11 +207,15 @@ async def test_tick_loop_survives_messenger_errors(registered, monkeypatch):
 
 class FakeApplication:
     def __init__(self):
-        self.bot = object()
+        self.bot = None
         self.handlers = []
+        self.processed = []
 
     def add_handler(self, handler, group=0):
         self.handlers.append(handler)
+
+    async def process_update(self, update):
+        self.processed.append(update)
 
 
 @pytest.fixture
@@ -255,7 +250,7 @@ def _tg_voice_update(chat_type):
 async def test_wire_registers_private_voice_and_ta_callback_handlers(wired):
     plugin, app = wired
     voice, cb = _handlers(app)
-    assert plugin.bot is app.bot and plugin.loop is not None
+    assert plugin.application is app and plugin.loop is not None
     assert voice.check_update(_tg_voice_update("private"))
     assert not voice.check_update(_tg_voice_update("group"))
     assert cb.pattern.pattern == r"^ta:"
@@ -268,7 +263,8 @@ def _voice_update(user_id, fail=False):
         async def download_as_bytearray():
             return bytearray(b"audio")
         return SimpleNamespace(download_as_bytearray=download_as_bytearray)
-    msg = SimpleNamespace(chat_id=user_id, voice=SimpleNamespace(get_file=get_file), audio=None)
+    msg = SimpleNamespace(chat_id=user_id, message_id=7, voice=SimpleNamespace(get_file=get_file),
+                          audio=None)
     return SimpleNamespace(effective_user=SimpleNamespace(id=user_id), effective_message=msg)
 
 
@@ -278,20 +274,20 @@ async def test_authorized_voice_is_processed_and_stops_core(wired, monkeypatch, 
     plugin, app = wired
     seen = []
 
-    async def on_voice(chat_id, audio):
-        seen.append((chat_id, audio))
+    async def on_voice(chat_id, audio, source):
+        seen.append((chat_id, audio, source))
     monkeypatch.setattr(plugin.voice, "on_voice", on_voice)
     voice, _ = _handlers(app)
     with pytest.raises(ApplicationHandlerStop):
         await voice.callback(_voice_update(42, fail=fail), None)
-    assert seen == ([] if fail else [("42", b"audio")])
+    assert seen == ([] if fail else [("42", b"audio", "42:7")])
 
 
 async def test_unauthorized_voice_is_left_to_hermes(wired, monkeypatch):
     plugin, app = wired
     seen = []
 
-    async def on_voice(chat_id, audio):
+    async def on_voice(chat_id, audio, source):
         seen.append(chat_id)
     monkeypatch.setattr(plugin.voice, "on_voice", on_voice)
     voice, _ = _handlers(app)
@@ -337,3 +333,141 @@ def test_register_reads_token_file_and_scrubs_env(fake_ctx, monkeypatch, tmp_pat
     assert hermes_plugin._STATE.cfg.todoist_token == "t"
     assert "TODOIST_API_TOKEN" not in os.environ
     assert "t" not in [v for k, v in os.environ.items() if "TODOIST" in k.upper()]
+
+
+# --- vocal validé → message texte synthétique ------------------------------------------------
+
+
+def _tg_voice_message(**extra):
+    from datetime import datetime, timezone
+
+    from telegram import Chat, Message, User, Voice
+    return Message(message_id=77, date=datetime(2026, 11, 10, 8, 0, tzinfo=timezone.utc),
+                   chat=Chat(42, "private"), from_user=User(42, "Xavier", False),
+                   voice=Voice(file_id="f", file_unique_id="u", duration=3), **extra)
+
+
+def test_synthetic_update_is_a_plain_text_message_from_the_user():
+    from telegram import MessageEntity
+    from telegram.ext import filters
+
+    import hermes_plugin
+    voice_msg = _tg_voice_message(caption="légende",
+                                  caption_entities=[MessageEntity("bold", 0, 3)])
+    upd = hermes_plugin.build_text_update(voice_msg, "acheter du pain", -123, None)
+    m = upd.message
+    assert upd.update_id == -123
+    assert m.text == "acheter du pain"
+    assert m.voice is None and m.audio is None and m.caption is None and not m.caption_entities
+    assert not m.entities
+    assert m.chat.id == 42 and m.chat.type == "private"
+    assert m.from_user.id == 42 and not m.from_user.is_bot
+    assert m.message_id == 77 and m.date == voice_msg.date
+    # Le handler texte du cœur (filters.TEXT & ~COMMAND) le prend ; le handler vocal du plugin non.
+    assert (filters.TEXT & ~filters.COMMAND).check_update(upd)
+    assert not (filters.VOICE | filters.AUDIO).check_update(upd)
+
+
+def test_synthetic_update_starting_with_slash_is_not_a_command():
+    from telegram.ext import filters
+
+    import hermes_plugin
+    upd = hermes_plugin.build_text_update(_tg_voice_message(), "/t acheter du pain", -1, None)
+    assert not filters.COMMAND.check_update(upd)
+    assert (filters.TEXT & ~filters.COMMAND).check_update(upd)
+
+
+def test_synthetic_update_ids_are_negative_and_unique():
+    import hermes_plugin
+    ids = [hermes_plugin._next_synthetic_update_id() for _ in range(1000)]
+    assert all(i < 0 for i in ids)
+    assert len(set(ids)) == len(ids)
+    assert ids == sorted(ids, reverse=True)
+
+
+async def test_submitter_feeds_synthetic_text_update_to_the_application(wired):
+    plugin, app = wired
+    source = plugin.submitter.remember(_tg_voice_message())
+    assert source == "42:77"
+    await plugin.submitter.submit("42", source, "[Créer une tâche Todoist] pain")
+    (upd,) = app.processed
+    assert upd.update_id < 0 and upd.message.text == "[Créer une tâche Todoist] pain"
+    assert upd.message.voice is None and upd.message.message_id == 77
+    assert plugin.is_synthetic("42", "77")
+
+
+async def test_submitter_unknown_source_raises(wired):
+    plugin, app = wired
+    with pytest.raises(RuntimeError):
+        await plugin.submitter.submit("42", "42:999", "pain")
+    assert app.processed == []
+
+
+async def test_submitter_never_feeds_another_chat(wired):
+    plugin, app = wired
+    source = plugin.submitter.remember(_tg_voice_message())
+    with pytest.raises(RuntimeError):
+        await plugin.submitter.submit("99", source, "pain")
+    assert app.processed == []
+
+
+def test_synthetic_message_is_not_read_as_slash_t(registered):
+    import hermes_plugin
+    plugin = hermes_plugin._STATE
+    plugin.mark_synthetic("42", "7")
+    hook = registered.hooks["pre_gateway_dispatch"][0]
+    assert hook(event=_event("/t pain", message_id="7"), gateway=None, session_store=None) is None
+    res = hook(event=_event("/t pain", message_id="8"), gateway=None, session_store=None)
+    assert res == {"action": "rewrite", "text": "[Créer une tâche Todoist] pain"}
+
+
+def test_synthetic_message_becomes_the_armed_correction(registered):
+    import hermes_plugin
+    plugin = hermes_plugin._STATE
+    plugin.relay.arm_edit("42", "p1", "📝 Créer : pain")
+    plugin.mark_synthetic("42", "7")
+    hook = registered.hooks["pre_gateway_dispatch"][0]
+    res = hook(event=_event("[Créer une tâche Todoist] plutôt samedi", message_id="7"),
+               gateway=None, session_store=None)
+    assert res["action"] == "rewrite"
+    assert "p1" in res["text"] and "Correction demandée : plutôt samedi" in res["text"]
+
+
+@pytest.mark.parametrize("kind", ["voice", "audio"])
+def test_unvalidated_voice_from_owner_is_skipped(registered, kind):
+    hook = registered.hooks["pre_gateway_dispatch"][0]
+    assert hook(event=_event("", message_type=kind), gateway=None, session_store=None) == {
+        "action": "skip", "reason": "todoist-assistant: vocal non validé"}
+    assert hook(event=_event("", message_type=kind, user_id="99"), gateway=None,
+                session_store=None) is None
+    assert hook(event=_event("", message_type=kind, chat_type="group"), gateway=None,
+                session_store=None) is None
+
+
+def test_synthetic_text_is_not_skipped(registered):
+    import hermes_plugin
+    hermes_plugin._STATE.mark_synthetic("42", "7")
+    hook = registered.hooks["pre_gateway_dispatch"][0]
+    assert hook(event=_event("acheter du pain", message_id="7"), gateway=None,
+                session_store=None) is None
+
+
+async def test_pre_gateway_dispatch_captures_the_gateway_loop(registered):
+    import asyncio
+
+    import hermes_plugin
+    plugin = hermes_plugin._STATE
+    assert plugin.loop is None
+    hook = registered.hooks["pre_gateway_dispatch"][0]
+    hook(event=_event("bonjour"), gateway=None, session_store=None)
+    try:
+        assert plugin.loop is asyncio.get_running_loop()
+    finally:
+        plugin._tick_task.cancel()
+
+
+def test_pre_gateway_dispatch_without_loop_does_not_capture(registered):
+    import hermes_plugin
+    hook = registered.hooks["pre_gateway_dispatch"][0]
+    assert hook(event=_event("bonjour"), gateway=None, session_store=None) is None
+    assert hermes_plugin._STATE.loop is None

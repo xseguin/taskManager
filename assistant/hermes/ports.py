@@ -5,7 +5,7 @@ from typing import Protocol
 
 from assistant.render import Button
 
-__all__ = ["Button", "Messenger", "Injector"]
+__all__ = ["Button", "Messenger", "Submitter"]
 
 
 class Messenger(Protocol):
@@ -15,5 +15,7 @@ class Messenger(Protocol):
                    buttons: list[Button] | None = None) -> None: ...
 
 
-class Injector(Protocol):
-    def inject(self, chat_id: str, text: str) -> bool: ...
+class Submitter(Protocol):
+    """Remet `text` à Hermes comme un vrai message de l'utilisateur, à la place du vocal `source`."""
+
+    async def submit(self, chat_id: str, source: str, text: str) -> None: ...

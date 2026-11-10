@@ -95,14 +95,15 @@ class FakeTodoist:
 
 
 
-class FakeInjector:
+class FakeSubmitter:
     def __init__(self):
-        self.calls: list[tuple[str, str]] = []
-        self.accept = True
+        self.calls: list[tuple[str, str, str]] = []
+        self.fail = False
 
-    def inject(self, chat_id: str, text: str) -> bool:
-        self.calls.append((chat_id, text))
-        return self.accept
+    async def submit(self, chat_id: str, source: str, text: str) -> None:
+        self.calls.append((chat_id, source, text))
+        if self.fail:
+            raise RuntimeError("telegram down")
 
 
 class FakeMessenger:

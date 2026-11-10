@@ -11,6 +11,9 @@ import logging
 import os
 import sys
 import tempfile
+import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 
@@ -36,6 +39,8 @@ TOOLSET = "todoist"
 TICK_SECONDS = 15
 NOT_CONNECTED = "Telegram n'est pas connecté : impossible d'envoyer la carte de validation."
 READ_TOOLS = ("todoist_list_projects", "todoist_search_tasks", "todoist_get_task")
+MAX_REMEMBERED_VOICES = 256
+SKIP_VOICE = {"action": "skip", "reason": "todoist-assistant: vocal non validé"}
 
 _STATE: "_Plugin | None" = None
 
@@ -58,14 +63,6 @@ def _err(msg: str) -> str:
 
 def _platform_name(platform) -> str:
     return str(getattr(platform, "value", platform) or "").lower()
-
-
-def _telegram_chat_from_session_key(session_key: str | None) -> str | None:
-    # agent:main:telegram:dm:<chat_id>
-    parts = (session_key or "").split(":")
-    if len(parts) >= 5 and parts[2] == "telegram" and parts[-1]:
-        return parts[-1]
-    return None
 
 
 def _transcribe(audio: bytes) -> str:
@@ -121,17 +118,78 @@ class _TelegramMessenger:
                                             parse_mode="HTML", reply_markup=self._markup(buttons))
 
 
-class _HermesInjector:
-    def __init__(self, ctx):
-        self._ctx = ctx
+# --- vocal validé → message texte synthétique --------------------------------------------------
+#
+# Le texte validé est remis au cœur Telegram de Hermes comme un vrai message texte de l'utilisateur
+# (`application.process_update`) : la gateway l'admet comme n'importe quel tour humain, y compris en
+# session neuve (après /new) ou après un redémarrage, là où `ctx.inject_message` était refusé.
+#
+# Choix des identifiants (lus dans plugins/platforms/telegram/update_admission.py de Hermes) :
+# - update_id : `TelegramApplication.process_update` ignore toute mise à jour dont la clé
+#   `<bot_id>:<update_id>` est déjà dans `_seen_update_ids` (reçus persistés 24 h sur disque) ou
+#   `_inflight_update_ids`. L'update du vocal y est déjà : notre handler l'a acceptée
+#   (`claim.accepted`) avant d'arrêter la propagation. On prend donc un update_id NÉGATIF, unique et
+#   décroissant (horloge en microsecondes) : Telegram n'attribue que des update_id positifs, aucune
+#   collision possible avec un vrai update, ni avec un update synthétique d'avant un redémarrage
+#   (les reçus acceptent les ids négatifs). L'offset de polling (`Updater._last_update_id`) n'est
+#   mis à jour que par la boucle getUpdates de PTB, jamais par `process_update` : il n'est pas touché.
+# - message_id : celui du vocal d'origine (jamais admis par la gateway, puisque le plugin l'a
+#   arrêté). Hermes s'en sert comme identité d'admission (`request_id`) et comme ancre de réponse :
+#   la réponse cite le vrai vocal, et un « Renvoyer » après une première remise réellement admise
+#   est reconnu comme rejeu au lieu de créer un second tour.
+# Le texte n'a pas d'entités : même s'il commence par « / », ce n'est pas une commande Telegram.
 
-    def inject(self, chat_id: str, text: str) -> bool:
-        try:
-            return bool(self._ctx.inject_message(
-                text, role="user", session_key=f"agent:main:telegram:dm:{chat_id}"))
-        except Exception:
-            log.exception("inject_message a échoué")
-            return False
+_last_synthetic_id = 0
+_synthetic_lock = threading.Lock()
+
+
+def _next_synthetic_update_id() -> int:
+    global _last_synthetic_id
+    with _synthetic_lock:
+        candidate = -(time.time_ns() // 1000)
+        _last_synthetic_id = min(candidate, _last_synthetic_id - 1)
+        return _last_synthetic_id
+
+
+_MEDIA_FIELDS = ("voice", "audio", "caption", "caption_entities", "entities", "media_group_id",
+                 "show_caption_above_media", "has_media_spoiler")
+
+
+def build_text_update(message, text: str, update_id: int, bot):
+    """Update Telegram : `message` (le vocal) devenu un simple message texte `text`."""
+    from telegram import Message, Update
+    data = message.to_dict()
+    for field in _MEDIA_FIELDS:
+        data.pop(field, None)
+    data["text"] = text
+    return Update(update_id=update_id, message=Message.de_json(data, bot))
+
+
+class _TelegramSubmitter:
+    def __init__(self, plugin: "_Plugin"):
+        self._plugin = plugin
+        self._lock = threading.Lock()
+        self._messages: "OrderedDict[str, object]" = OrderedDict()
+
+    def remember(self, message) -> str:
+        source = f"{message.chat_id}:{message.message_id}"
+        with self._lock:
+            self._messages[source] = message
+            while len(self._messages) > MAX_REMEMBERED_VOICES:
+                self._messages.popitem(last=False)
+        return source
+
+    async def submit(self, chat_id: str, source: str, text: str) -> None:
+        with self._lock:
+            message = self._messages.get(source)
+        app = self._plugin.application
+        if message is None or str(message.chat_id) != chat_id:
+            raise RuntimeError(f"vocal d'origine introuvable : {source}")
+        if app is None:
+            raise RuntimeError(NOT_CONNECTED)
+        update = build_text_update(message, text, _next_synthetic_update_id(), app.bot)
+        self._plugin.mark_synthetic(chat_id, str(message.message_id))
+        await app.process_update(update)
 
 
 async def _guard(coro, what: str) -> None:
@@ -146,6 +204,7 @@ class _Plugin:
         self.ctx = ctx
         self.cfg = cfg
         self.bot = None
+        self.application = None
         self.loop: asyncio.AbstractEventLoop | None = None
         self._tick_task: asyncio.Task | None = None
         clock = lambda: datetime.now(cfg.timezone)  # noqa: E731
@@ -153,13 +212,23 @@ class _Plugin:
         self.store = PendingStore(connect(cfg.db_path), clock)
         self.executor = Executor(self.todoist, self.store)
         self.messenger = _TelegramMessenger(self)
-        self.relay = Relay(cfg.allowed_user_ids, _HermesInjector(ctx))
-        self.voice = VoiceFlow(self.messenger, self.relay, _transcribe, clock)
+        self.relay = Relay(cfg.allowed_user_ids, clock)
+        self.submitter = _TelegramSubmitter(self)
+        self._synthetic: "OrderedDict[tuple[str, str], None]" = OrderedDict()
+        self.voice = VoiceFlow(self.messenger, self.submitter, _transcribe, clock)
         self.proposals = ProposalFlow(self.store, self.executor, self.todoist, self.messenger,
                                       self.relay, cfg.owner_chat_id)
 
     def _allowed(self, user) -> bool:
         return user is not None and str(user.id) in self.cfg.allowed_user_ids
+
+    def mark_synthetic(self, chat_id: str, message_id: str) -> None:
+        self._synthetic[(chat_id, message_id)] = None
+        while len(self._synthetic) > MAX_REMEMBERED_VOICES:
+            self._synthetic.popitem(last=False)
+
+    def is_synthetic(self, chat_id: str, message_id: str) -> bool:
+        return (chat_id, message_id) in self._synthetic
 
     # --- Telegram ---------------------------------------------------------
 
@@ -171,6 +240,7 @@ class _Plugin:
         except RuntimeError:
             return
         self._tick_task = self.loop.create_task(self._tick_loop())
+        log.info("todoist-assistant : boucle asyncio capturée")
 
     async def _tick_loop(self) -> None:
         while True:
@@ -180,6 +250,7 @@ class _Plugin:
     def wire(self, application, adapter=None) -> None:
         from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, MessageHandler, filters
 
+        self.application = application
         self.bot = application.bot
         self._capture_loop()
 
@@ -209,7 +280,8 @@ class _Plugin:
         try:
             file = await media.get_file()
             audio = bytes(await file.download_as_bytearray())
-            await self.voice.on_voice(str(msg.chat_id), audio)
+            source = self.submitter.remember(msg)
+            await self.voice.on_voice(str(msg.chat_id), audio, source)
         except Exception:
             log.exception("traitement du vocal en échec")
         return True
@@ -241,32 +313,25 @@ class _Plugin:
             source = event.source
             if _platform_name(source.platform) != "telegram":
                 return None
+            # Après un redémarrage, `wire` peut être appelé avant que la boucle tourne. Ce hook est
+            # exécuté en ligne sur la boucle de la gateway (`asyncio.run` du thread principal) :
+            # on la capture ici, jamais depuis un thread auxiliaire qui aurait sa propre boucle.
+            if self.loop is None and threading.current_thread() is threading.main_thread():
+                self._capture_loop()
             user_id = None if source.user_id is None else str(source.user_id)
-            text = self.relay.rewrite(user_id, str(source.chat_id), event.text or "")
+            allowed = user_id is not None and user_id in self.cfg.allowed_user_ids
+            chat_id = str(source.chat_id)
+            kind = _platform_name(getattr(event, "message_type", None))
+            # Second garde-fou : un vocal du propriétaire en privé n'atteint jamais Hermes sans
+            # validation, même si une mise à jour de Hermes changeait l'ordre des handlers.
+            if allowed and kind in ("voice", "audio") and getattr(source, "chat_type", None) == "dm":
+                return SKIP_VOICE
+            synthetic = self.is_synthetic(chat_id, str(getattr(event, "message_id", None)))
+            text = self.relay.rewrite(user_id, chat_id, event.text or "", synthetic=synthetic)
             return {"action": "rewrite", "text": text} if text is not None else None
         except Exception:
             log.exception("pre_gateway_dispatch a échoué")
             return None
-
-    def post_gateway_admission(self, session_key=None, platform=None, source=None,
-                               message_id=None, text=None, **kwargs):
-        try:
-            if _platform_name(platform) == "telegram" and source and source.get("chat_id"):
-                self.relay.note_admission(str(source["chat_id"]))
-        except Exception:
-            log.exception("post_gateway_admission a échoué")
-        return None
-
-    def pre_command(self, surface=None, command=None, alias_used=None, args_raw=None,
-                    session_key=None, platform=None, **kwargs):
-        try:
-            if (command or "").lstrip("/").lower() in {"new", "reset"}:
-                chat_id = _telegram_chat_from_session_key(session_key)
-                if chat_id:
-                    self.relay.note_reset(chat_id)
-        except Exception:
-            log.exception("pre_command a échoué")
-        return None
 
     def pre_llm_call(self, session_id=None, user_message=None, conversation_history=None,
                      is_first_turn=None, model=None, platform=None, **kwargs):
@@ -324,8 +389,6 @@ def register(ctx) -> None:
     ctx.register_platform_handler("telegram", plugin.wire)
 
     ctx.register_hook("pre_gateway_dispatch", plugin.pre_gateway_dispatch)
-    ctx.register_hook("post_gateway_admission", plugin.post_gateway_admission)
-    ctx.register_hook("pre_command", plugin.pre_command)
     ctx.register_hook("pre_llm_call", plugin.pre_llm_call)
 
     for name in READ_TOOLS:

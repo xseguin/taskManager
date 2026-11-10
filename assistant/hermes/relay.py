@@ -1,57 +1,50 @@
-"""Relais vers Hermes : réécritures de messages, repli « ok », suivi des tours humains."""
+"""Relais vers Hermes : réécriture des messages de l'utilisateur (`/t`, correction de proposition)."""
 from __future__ import annotations
 
 import threading
+from datetime import datetime, timedelta
+from typing import Callable
 
-from assistant.hermes.ports import Injector
-from assistant.hermes.prompt import as_task, edit_request
+from assistant.hermes.prompt import TASK_MARKER, as_task, edit_request
+
+EDIT_TTL = timedelta(minutes=10)
 
 
 class Relay:
-    def __init__(self, allowed_user_ids: tuple[str, ...], injector: Injector):
+    def __init__(self, allowed_user_ids: tuple[str, ...], clock: Callable[[], datetime],
+                 edit_ttl: timedelta = EDIT_TTL):
         self._allowed = tuple(allowed_user_ids)
-        self._injector = injector
+        self._clock = clock
+        self._edit_ttl = edit_ttl
         self._lock = threading.Lock()
-        self._human: set[str] = set()
-        self._ok: dict[str, str] = {}
-        self._edit: dict[str, tuple[str, str]] = {}
-
-    def note_admission(self, chat_id: str) -> None:
-        with self._lock:
-            self._human.add(chat_id)
-
-    def note_reset(self, chat_id: str) -> None:
-        with self._lock:
-            self._human.discard(chat_id)
-
-    def has_human_turn(self, chat_id: str) -> bool:
-        with self._lock:
-            return chat_id in self._human
-
-    def arm_ok(self, chat_id: str, text: str) -> None:
-        with self._lock:
-            self._ok[chat_id] = text
+        # chat_id -> (proposal_id, résumé, armé à)
+        self._edit: dict[str, tuple[str, str, datetime]] = {}
 
     def arm_edit(self, chat_id: str, proposal_id: str, summary: str) -> None:
         with self._lock:
-            self._edit[chat_id] = (proposal_id, summary)
+            self._edit[chat_id] = (proposal_id, summary, self._clock())
 
-    def deliver(self, chat_id: str, text: str) -> bool:
-        if self.has_human_turn(chat_id) and self._injector.inject(chat_id, text):
-            return True
-        self.arm_ok(chat_id, text)
-        return False
+    def drop_edit(self, proposal_id: str) -> None:
+        """La proposition est validée, annulée ou remplacée : sa correction n'est plus attendue."""
+        with self._lock:
+            for chat_id, armed in list(self._edit.items()):
+                if armed[0] == proposal_id:
+                    del self._edit[chat_id]
 
-    def rewrite(self, user_id: str | None, chat_id: str, text: str) -> str | None:
+    def rewrite(self, user_id: str | None, chat_id: str, text: str,
+                synthetic: bool = False) -> str | None:
+        """`synthetic` : transcription d'un vocal validé par bouton. Elle peut servir de correction
+        à une proposition (« Modifier » puis vocal), mais n'est jamais lue comme une commande `/t`."""
         if user_id is None or user_id not in self._allowed:
             return None
-        stripped = text.strip()
         with self._lock:
-            if stripped.casefold() == "ok":
-                return self._ok.pop(chat_id, None)
             edit = self._edit.pop(chat_id, None)
-        if edit is not None:
-            return edit_request(edit[0], edit[1], text)
+        if edit is not None and self._clock() - edit[2] <= self._edit_ttl:
+            correction = text.removeprefix(TASK_MARKER) if synthetic else text
+            return edit_request(edit[0], edit[1], correction)
+        if synthetic:
+            return None
+        stripped = text.strip()
         if stripped.startswith("/t "):
             body = stripped[3:].strip()
             if body:

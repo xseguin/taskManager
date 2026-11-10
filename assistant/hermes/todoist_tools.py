@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 from pydantic import ValidationError
 
@@ -18,6 +19,8 @@ from assistant.render import (proposal_buttons, render_proposal, render_results,
                               retry_remaining_button)
 from assistant.todoist_client import TaskNotFound, TodoistError, TodoistPort, format_tasks_for_llm
 from assistant.validation import validate_actions
+
+log = logging.getLogger("todoist-assistant")
 
 EXPIRED_MSG = "Cette proposition est expirée ou déjà traitée."
 EDIT_PROMPT = "✏️ Que veux-tu changer ?"
@@ -108,17 +111,24 @@ class ProposalFlow:
             else:
                 msgs = str(e)
             return _err(f"Proposition invalide : {msgs}")
+        old_id = args.get("replaces_proposal_id")
+        if old_id is not None and not isinstance(old_id, str):
+            return _err("replaces_proposal_id doit être une chaîne (identifiant de proposition).")
         errors = await asyncio.to_thread(validate_actions, actions, self._todoist)
         if errors:
             return _err(" ".join(errors))
         p = self._store.create(actions, source_text="")
         mid = await self._messenger.send(self._owner, render_proposal(p), proposal_buttons(p.id))
         self._store.set_message_id(p.id, mid)
-        old_id = args.get("replaces_proposal_id")
-        if old_id and self._store.transition(old_id, {ProposalStatus.PENDING}, ProposalStatus.REPLACED):
-            old = self._store.get(old_id)
-            if old and old.message_id is not None:
-                await self._messenger.edit(self._owner, old.message_id, render_results(old), None)
+        if old_id:
+            self._relay.drop_edit(old_id)
+            if self._store.transition(old_id, {ProposalStatus.PENDING}, ProposalStatus.REPLACED):
+                old = self._store.get(old_id)
+                try:
+                    if old and old.message_id is not None:
+                        await self._messenger.edit(self._owner, old.message_id, render_results(old), None)
+                except Exception:  # la nouvelle carte est envoyée : l'ancienne reste simplement en l'état
+                    log.exception("mise à jour de la carte remplacée %s en échec", old_id)
         return json.dumps({"status": "pending_user_validation", "proposal_id": p.id})
 
     async def on_button(self, chat_id: str, message_id: int, verb: str, proposal_id: str) -> None:
@@ -127,11 +137,13 @@ class ProposalFlow:
             if p is None:
                 await self._refuse(chat_id, message_id, proposal_id)
                 return
+            self._relay.drop_edit(proposal_id)
             buttons = [retry_remaining_button(p.id)] if p.status == ProposalStatus.PARTIAL else None
             await self._messenger.edit(chat_id, message_id, render_results(p), buttons)
         elif verb == "cancel":
             if self._store.transition(proposal_id, {ProposalStatus.PENDING, ProposalStatus.EDITING},
                                       ProposalStatus.CANCELLED):
+                self._relay.drop_edit(proposal_id)
                 await self._messenger.edit(chat_id, message_id,
                                            render_results(self._store.get(proposal_id)), None)
             else:
