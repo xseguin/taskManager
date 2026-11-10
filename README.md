@@ -1,61 +1,73 @@
-# Assistant vocal de tâches
+# Assistant de tâches (plugin Hermes)
 
-Bot Telegram personnel : tu envoies un vocal (ou un texte), Claude propose les actions Todoist correspondantes, tu valides d'un clic.
+Plugin Telegram pour [Hermes](https://github.com/NousResearch/hermes-agent) : tu envoies un vocal, une carte à boutons apparaît (💬 Discuter · 📝 Créer une tâche · ✖️ Annuler). Pour une tâche, Hermes propose les actions Todoist correspondantes sous forme de **cartes** ; rien n'est écrit dans Todoist avant ton clic sur **Valider**.
 
-Spec : `docs/superpowers/specs/2026-11-09-assistant-vocal-taches-design.md`
+Spec : `docs/superpowers/specs/2026-11-10-plugin-hermes-taches-design.md`
 
-## 1. Récupérer les clés
+## Fonctionnement
 
-| Variable | Où l'obtenir |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Dans Telegram, écrire à **@BotFather** → `/newbot` → copier le jeton. |
-| `TELEGRAM_ALLOWED_USER_ID` | Écrire à **@userinfobot** : il répond avec ton identifiant numérique. |
-| `ANTHROPIC_API_KEY` | console.anthropic.com → API Keys. **Fixe un plafond de dépense mensuel** (Settings → Limits), par ex. 5 $. |
-| `TODOIST_API_TOKEN` | Todoist → Paramètres → Intégrations → Développeur → jeton d'API. **Plugin Hermes :** jamais dans `~/.hermes/.env` ; le mettre dans `~/.config/todoist-assistant/token` (dossier 0700, fichier 0600) de l'utilisateur `hermes`, voir `deploy/sandbox.md`. |
-| `GROQ_API_KEY` | console.groq.com → API Keys. |
+- **Vocal** : transcrit (Groq), puis carte à trois boutons. **Discuter** transmet la transcription à Hermes (« ⏳ Transmis à Hermes… » puis « ✅ Reçu par Hermes » ; si la réception n'est pas confirmée en 180 s, la carte te demande de répondre `ok`). **Créer une tâche** transmet le texte précédé du marqueur `[Créer une tâche Todoist] `. **Annuler** : Hermes ne reçoit rien. Une carte vocale expire après 24 h.
+- **`/t <texte>`** : demande de tâche directe, sans passer par un vocal.
+- **Cartes Todoist** (créer, terminer, modifier…) : **Valider**, **Modifier** (tu corriges en une phrase ; l'ancienne carte passe à « ↪️ Remplacé »), **Annuler**. Seul un clic sur **Valider** (ou « Réessayer ce qui reste ») écrit dans Todoist.
+- Seuls les comptes de `TELEGRAM_ALLOWED_USERS` sont écoutés ; les cartes sont envoyées en message privé au premier ID de la liste.
 
-## 2. Installer sur le VPS
+## Clés et réglages
 
-```bash
-sudo useradd --system --home /opt/assistant-taches --shell /usr/sbin/nologin assistant
-sudo git clone <ce dépôt> /opt/assistant-taches     # ou copier le dossier
-cd /opt/assistant-taches
-sudo python3 -m venv .venv
-sudo .venv/bin/pip install .
-sudo cp .env.example .env && sudo nano .env          # remplir les clés
-sudo mkdir -p data && sudo chown -R assistant:assistant /opt/assistant-taches
-sudo chmod 600 .env
-sudo cp deploy/assistant.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now assistant
-journalctl -u assistant -f                            # suivre les journaux
-```
+| Où | Variable / fichier | Origine |
+|---|---|---|
+| `~/.hermes/.env` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USERS` | Déjà présents (Hermes). ID numérique via **@userinfobot**. |
+| `~/.hermes/.env` | `GROQ_API_KEY` | console.groq.com → API Keys (transcription). |
+| `/home/hermes/.config/todoist-assistant/token` | jeton d'API Todoist | Todoist → Paramètres → Intégrations → Développeur. Dossier 0700, fichier 0600, propriétaire `hermes`. |
 
-Python ≥ 3.11 requis. Aucun port à ouvrir : le bot va chercher les messages chez Telegram (long polling).
+**Le jeton Todoist ne va jamais dans `~/.hermes/.env`** (aucune variable `TODOIST_*` dans l'environnement de Hermes) et n'est jamais donné à Hermes : seul le plugin le lit, dans ce fichier.
 
-Mise à jour : `git pull && .venv/bin/pip install . && sudo systemctl restart assistant`.
+## Installation sur le VPS
 
-## 3. Développement
+Depuis le poste de dev (le compte SSH doit avoir sudo sans mot de passe ; les fichiers sont écrits en tant que `hermes`) :
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/pytest -q
+deploy/install_plugin.sh <hôte-ssh>
 ```
 
-Évaluation de la compréhension (appelle le vrai Claude, quelques centimes) :
+Le script copie le plugin dans `~hermes/.hermes/plugins/todoist-assistant`, l'active (`hermes plugins enable`), autorise l'injection côté gateway et redémarre `hermes-gateway`. Préalables : Hermes installé pour l'utilisateur `hermes`, `rsync` des deux côtés, jeton Todoist posé dans le fichier ci-dessus. Vérifier : `journalctl --user -u hermes-gateway --since -2min`.
+
+## Isolation (à lire)
+
+Les outils de l'agent (terminal, fichiers, code) tournent dans un conteneur Docker rootless qui ne voit ni `.env`, ni le jeton Todoist. Mise en place, vérifications et **liste de contrôle après chaque `hermes update`** : `deploy/sandbox.md`. Règles :
+
+- **Ne jamais approuver** un skill qui demande des variables `TODOIST_*` ou des fichiers d'identifiants ; ne jamais donner la clé Todoist à Hermes.
+- Hermes n'a **pas d'outil navigateur** (désactivé volontairement, il s'exécuterait sur l'hôte), ni `connections`.
+- `skills.write_approval` est activé : toute écriture de skill demande ton approbation (`/skills pending`).
+
+## Développement
+
+Python ≥ 3.11 :
 
 ```bash
-ANTHROPIC_API_KEY=... .venv/bin/python evals/run_evals.py
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]' && .venv/bin/pytest -q
 ```
 
-## 4. Recette manuelle (avant usage réel)
+## Recette complète (avant usage réel)
 
-Crée un projet Todoist **Bot-test**, puis vérifie :
+Projet Todoist **Bot-test**, sur le VPS ; cocher chaque point.
 
-1. Vocal « ajoute acheter du pain demain dans Bot-test » → transcription affichée → proposition → **Valider** → tâche visible dans Todoist.
-2. « Le pain c'est fait » → proposition **Terminer** → Valider.
-3. Une proposition → **Modifier** → « plutôt vendredi » → l'ancien message passe à « Remplacé », une nouvelle proposition arrive.
-4. Une proposition → **Annuler**.
-5. Double-clic rapide sur **Valider** → une seule tâche créée.
-6. « Qu'est-ce que j'ai aujourd'hui ? » → réponse sans bouton.
-7. Message depuis un autre compte Telegram → aucune réponse.
-8. `sudo systemctl restart assistant`, puis clic sur un bouton d'une proposition envoyée avant → fonctionne.
+- [ ] 1. Vocal → carte à 3 boutons → **💬 Discuter** → « ⏳ Transmis à Hermes… » puis « ✅ Reçu par Hermes », et réponse de Hermes.
+- [ ] 2. Vocal « ajoute acheter du pain demain dans Bot-test » → **📝 Créer une tâche** → carte Todoist → **Valider** → tâche visible dans Todoist.
+- [ ] 3. Vocal → **✖️ Annuler** → Hermes ne reçoit rien.
+- [ ] 4. `/t acheter du lait vendredi` → carte Todoist.
+- [ ] 5. `/new` puis vocal → **💬 Discuter** → « Réponds ok » → `ok` → Hermes répond à la transcription.
+- [ ] 6. « le pain c'est fait » → carte **Terminer** → Valider.
+- [ ] 7. Carte → **Modifier** → « plutôt samedi » → l'ancienne carte passe à « ↪️ Remplacé » et une nouvelle arrive.
+- [ ] 8. Double clic sur **Valider** → une seule tâche créée.
+- [ ] 9. « rappelle-moi d'appeler le plombier lundi » (sans bouton) → carte Todoist, sans cron ni liste interne : vérifier `hermes cron list` et l'absence de fichier créé.
+- [ ] 10. Demander à Hermes d'écrire lui-même dans Todoist via le terminal ou `curl` → impossible (clé introuvable).
+- [ ] 11. Bouton natif de Hermes (question `clarify` ou approbation) → fonctionne toujours.
+- [ ] 12. Message d'un autre compte Telegram → aucune réaction.
+- [ ] 13. `systemctl --user restart hermes-gateway`, puis clic sur une carte Todoist envoyée avant → fonctionne. Clic sur une carte vocale d'avant → « expiré ou déjà traité ».
+
+## Recette courte après chaque `hermes update`
+
+1. Contrôles de sécurité de `deploy/sandbox.md` (section « Après chaque `hermes update` »).
+2. Vocal → la carte à 3 boutons apparaît.
+3. `/t acheter du lait vendredi` → carte Todoist.
+4. **Valider** → tâche créée dans Todoist (puis la supprimer).
