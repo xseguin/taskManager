@@ -8,7 +8,9 @@ Les commandes root passent par `ssh hermes-vps` (compte `claude`), celles de l'u
 Résultat : `terminal`, `execute_code` et les outils de fichiers (`read_file`, `write_file`, `patch`,
 `search_files`) s'exécutent dans un conteneur Docker lancé par le démon rootless de `hermes`. Le
 conteneur ne voit ni `~/.hermes/.env`, ni `config.yaml`, ni les données du plugin, ni aucune variable
-`TODOIST_*`. La gateway (hors conteneur) garde la clé et le plugin `todoist-assistant` fonctionne.
+`TODOIST_*`. Le jeton Todoist n'est plus dans `~/.hermes/.env` ni dans l'environnement de la gateway :
+le plugin le lit dans `/home/hermes/.config/todoist-assistant/token` (§5). Le plugin
+`todoist-assistant` fonctionne.
 
 ## 1. Installation de Docker, sans démon root (compte `claude`)
 
@@ -115,12 +117,13 @@ commande sur l'hôte :
 | `terminal`, `process_manage`, `execute_code`, `read_file`, `write_file`, `patch`, `search_files` | Dans le conteneur (`docker exec`), vérifié ci-dessous. |
 | `vision_analyze` | Sur un backend non local, lit sur l'hôte uniquement dans les caches média ; sinon lecture dans le conteneur (`tools/image_source.py`). |
 | `computer_use` | `bot_desktop.placement: auto` + backend docker ⇒ écran et pilote dans le conteneur (`tools/bot_desktop/placement.py`). |
-| `skill_view`, `skill_manage` | Confinés à `~/.hermes/skills` (refus de `..`, `validate_within_dir`). Écriture sur l'hôte possible dans ce dossier, monté en lecture seule dans le conteneur. |
+| `skill_view`, `skill_manage` | Confinés à `~/.hermes/skills` (refus de `..`, `validate_within_dir`). Les écritures de `skill_manage` sont mises en attente d'approbation (`skills.write_approval: true`, §5). |
 | `cronjob_manage` | Les scripts doivent être des fichiers de `~/.hermes/scripts/` (dossier absent, non inscriptible depuis le conteneur) ; les jobs agents respectent `agent.disabled_toolsets`. |
 | `delegate_task` | Les sous-agents n'ont jamais plus d'outils que le parent, même conteneur. |
 | `memory`, `session_search`, `todo_list`, `clarify` | Données internes de Hermes (mémoire, historique), pas d'accès fichier libre. |
 | `web_search`, `web_extract` | `http`/`https` seulement (`tools/url_safety.py`), pas de `file://`. |
-| `image_generate`, `text_to_speech`, `manage_connections` | Services distants / cache audio. |
+| `image_generate`, `text_to_speech` | Services distants / cache audio. |
+| `manage_connections` | **Désactivé** (§5) : pouvait brancher le MCP Todoist officiel (OAuth) et écrire sans clic. |
 | Livraison `MEDIA:` de la gateway | Liste blanche de dossiers (`gateway/media_policy.py`). |
 | Plugin `todoist` | Outils `propose_*` : cartes à valider, aucune écriture Todoist. |
 
@@ -160,15 +163,107 @@ Les trois exécutions : « SECRET VALUES FOUND IN OUTPUT: none ».
 Restent à faire par l'utilisateur sur Telegram (recette §9) : même tentative de lecture de la clé et
 d'appel Todoist depuis l'agent, et vérification que les cartes et boutons fonctionnent toujours.
 
+## 5. Correctif 1 : jeton hors de HERMES_HOME, skills soumis à approbation, `connections` coupé
+
+Failles relevées en revue :
+
+1. **Critique.** L'agent pouvait créer un skill (`skill_manage`, sans approbation) déclarant
+   `required_environment_variables: [TODOIST_API_TOKEN]`. Un `skill_view` enregistre alors la
+   variable comme transmissible et `DockerEnvironment` la passe au conteneur (`-e TODOIST_API_TOKEN`)
+   à chaque commande : la liste de refus ne couvre que les secrets propres à Hermes.
+2. `manage_connections` (`connections`) pouvait brancher le MCP Todoist officiel (OAuth) et donner
+   à l'agent des écritures Todoist directes, sans clic.
+3. Un skill pouvait déclarer `required_credential_files` et monter en lecture seule des fichiers de
+   HERMES_HOME (`config.yaml`, base du plugin, `state.db`).
+
+### Code (commit `78603ff`)
+
+`assistant/config.py` : `load_config(env, data_dir, token_file)` lit le jeton dans un fichier
+(`ConfigError` si absent ou vide) ; `TODOIST_API_TOKEN` n'est plus lu dans l'environnement.
+`hermes_plugin/__init__.py` : fichier `~<utilisateur courant>/.config/todoist-assistant/token`
+(home résolu par `pwd`, pas `$HOME`) et `os.environ.pop("TODOIST_API_TOKEN")` à l'enregistrement.
+Tests : 106 réussis (`run-tests.sh -q`).
+
+### Exploitation (en `hermes`)
+
+Déplacement du jeton sans jamais l'afficher. Le fichier `.env` d'origine est sauvegardé **hors** de
+HERMES_HOME (dans HERMES_HOME, un skill pourrait le monter comme fichier d'identifiants) :
+
+```bash
+umask 077
+D=/home/hermes/.config/todoist-assistant
+mkdir -p "$D" && chmod 700 "$D"
+cp -p ~/.hermes/.env "$D/env.bak-todoist" && chmod 600 "$D/env.bak-todoist"
+# script Python (python3 -I) : extrait la valeur de la ligne TODOIST_API_TOKEN= de ~/.hermes/.env
+# vers $D/token (os.open 0600), puis réécrit .env sans cette ligne (même mode, os.replace).
+```
+
+Avant : la valeur du jeton ne figurait que dans `~/.hermes/.env` (recherche de la valeur dans tout
+`~/.hermes` hors code : 1 fichier).
+
+```bash
+cp -p ~/.hermes/config.yaml ~/.hermes/config.yaml.bak-sandbox-fix1
+hermes config set skills.write_approval true
+hermes tools disable --platform cli connections
+hermes tools disable --platform telegram connections
+hermes tools disable --platform cron connections
+hermes config set agent.disabled_toolsets '["browser","connections"]'
+```
+
+Puis, depuis le poste : `deploy/install_plugin.sh hermes-vps` (redéploie le plugin et redémarre
+la gateway).
+
+Pour la faille 3, `skills.write_approval: true` met en attente **toute** écriture de `skill_manage`
+(création, modification, `batch`, frontmatter compris : `_run_write_gate` dans
+`tools/skill_manager_tool.py` et `tools/skill_manager_batch.py`), quelle qu'en soit l'origine. Les
+skills de projet exigent `hermes skills trust`. Le conteneur ne peut pas écrire dans `~/.hermes/skills`
+(montage en lecture seule). Aucun des fichiers montables ne contient le jeton.
+
+### Vérifications
+
+| Commande / test | Résultat |
+|---|---|
+| `stat -c '%a %U' ~/.config/todoist-assistant{,/token,/env.bak-todoist} ~/.hermes/.env` | `700`, `600`, `600`, `600`, tous `hermes` |
+| `grep -c -i todoist ~/.hermes/.env` | `0` |
+| Comparaison du fichier `token` avec la valeur sauvegardée (sans affichage) | identiques (40 caractères) |
+| Environnement de la gateway (`/proc/<MainPID>/environ`) | `0` nom contenant `TODOIST` |
+| `yaml.safe_load(config.yaml)` | `agent.disabled_toolsets = ['browser', 'connections']`, `skills.write_approval = True`, `terminal.backend = docker`, `mcp_servers = None` |
+| `hermes tools list --platform cli\|telegram\|cron` | `browser` et `connections` désactivés, `todoist` actif |
+| Agent : `skill_manage create` d'un skill déclarant `TODOIST_API_TOKEN` | `"staged": true` … `Staged for approval (skills.write_approval is on). Not yet saved` |
+| Agent : `skill_view` de ce skill | `Skill 'probe-env-agent' not found` |
+| Skill équivalent posé à la main sur l'hôte (comme s'il avait été approuvé), puis `skill_view` par l'agent | `missing_required_environment_variables: ["TODOIST_API_TOKEN"]` : la variable n'existe plus nulle part |
+| Agent, après ces `skill_view` : terminal `env \| grep -i todoist` | vide (`rc=1`) |
+| Agent : `execute_code` `[k for k in os.environ if "TODOIST" in k.upper()]` | `[]` |
+| Agent : présence de `manage_connections` / `browser_exec` | absents de ses outils |
+| `hermes chat -q "Liste mes projets Todoist" --oneshot -Q` | « Inbox, Bot-test » |
+| Toutes les sorties de l'agent (`run.sh`) | `SECRET VALUES FOUND IN OUTPUT: none` |
+
+Les deux skills de sonde ont été retirés (`~/.hermes/skills/probe-env-operator`, écriture en attente
+`~/.hermes/pending/skills/<id>.json`).
+
+À savoir : quand un skill réclame une variable absente, la CLI interactive demande sa valeur
+(« Enter value for TODOIST_API_TOKEN ») et la gateway Telegram suggère de l'ajouter à
+`~/.hermes/.env`. **Ne jamais le faire pour le jeton Todoist**, et ne jamais approuver
+(`/skills pending`) un skill qui déclare `TODOIST_*` ou des `required_credential_files`.
+
+## Après chaque `hermes update`
+
+1. `python3 -c "import yaml;c=yaml.safe_load(open('/home/hermes/.hermes/config.yaml'));print(c['terminal']['backend'], c['terminal']['docker_mount_cwd_to_workspace'], c['skills']['write_approval'], c['agent']['disabled_toolsets'], c.get('mcp_servers'))"`
+   ⇒ `docker False True ['browser', 'connections'] None`.
+2. `hermes tools list --platform telegram` (et `cli`, `cron`) : `browser` et `connections`
+   désactivés ; aucun nouvel outil qui s'exécuterait sur l'hôte (lire sa doc / son code).
+3. `grep -c -i todoist ~/.hermes/.env` ⇒ `0` ; aucun `TODOIST` dans `/proc/<MainPID>/environ`
+   de la gateway.
+4. Pas de `terminal.docker_forward_env`, `docker_volumes`, `env_passthrough`, `credential_files`.
+5. Relancer les sondes de §4 et §5 avec `~hermes/sandbox-check/run.sh "<consigne>"`, puis
+   retirer les skills de sonde.
+
 ## Retour arrière
 
 ```bash
 sudo -iu hermes bash -c 'cp -p ~/.hermes/config.yaml.bak-sandbox ~/.hermes/config.yaml && XDG_RUNTIME_DIR=/run/user/1001 systemctl --user restart hermes-gateway'
 ```
 
-(Le retour à `terminal.backend: local` rend de nouveau la clé lisible par l'agent.)
+(Le retour à `terminal.backend: local` rend de nouveau lisible par l'agent tout ce que `hermes` peut
+lire, y compris `~/.config/todoist-assistant/token`.)
 
-## Après chaque `hermes update`
-
-Relancer `hermes tools list --platform telegram` et vérifier qu'aucun nouvel outil ne s'exécute sur
-l'hôte, puis relancer les tests ci-dessus avec `~hermes/sandbox-check/run.sh "<consigne>"`.
