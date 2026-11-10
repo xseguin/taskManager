@@ -6,9 +6,10 @@ Spec : `docs/superpowers/specs/2026-11-10-plugin-hermes-taches-design.md`
 
 ## Fonctionnement
 
-- **Vocal** : transcrit (Groq), puis carte à trois boutons. **Discuter** transmet la transcription à Hermes (« ⏳ Transmis à Hermes… » puis « ✅ Reçu par Hermes » ; si la réception n'est pas confirmée en 180 s, la carte te demande de répondre `ok`). **Créer une tâche** transmet le texte précédé du marqueur `[Créer une tâche Todoist] `. **Annuler** : Hermes ne reçoit rien. Une carte vocale expire après 24 h.
+- **Vocal** : transcrit (Groq), puis carte à trois boutons. **Discuter** envoie aussitôt la transcription à Hermes, comme si tu l'avais tapée (aucune autre validation, y compris juste après `/new` ou un redémarrage) : « ⏳ Transmis à Hermes… » puis « ✅ Reçu par Hermes ». Si la réception n'est pas confirmée en 180 s, la carte affiche « ⚠️ Hermes n'a pas confirmé la réception. » avec un bouton **🔁 Renvoyer** (un seul renvoi). **Créer une tâche** envoie le texte précédé du marqueur `[Créer une tâche Todoist] `. **Annuler** : Hermes ne reçoit rien. Une carte vocale expire après 24 h. Un vocal n'atteint jamais Hermes sans passer par cette carte.
 - **`/t <texte>`** : demande de tâche directe, sans passer par un vocal.
-- **Cartes Todoist** (créer, terminer, modifier…) : **Valider**, **Modifier** (tu corriges en une phrase ; l'ancienne carte passe à « ↪️ Remplacé »), **Annuler**. Seul un clic sur **Valider** (ou « Réessayer ce qui reste ») écrit dans Todoist.
+- **Cartes Todoist** (créer, terminer, modifier…) : **Valider**, **Modifier** (tu corriges en une phrase, tapée ou dictée : un vocal validé par **Discuter** ou **Créer une tâche** sert de correction ; la correction est attendue 10 min ; l'ancienne carte passe à « ↪️ Remplacé »), **Annuler**. Seul un clic sur **Valider** (ou « Réessayer ce qui reste ») écrit dans Todoist.
+- Les cartes ne partent que sur Telegram : une demande de tâche faite depuis une session CLI de Hermes ne peut pas afficher de carte (l'outil renvoie une erreur).
 - Seuls les comptes de `TELEGRAM_ALLOWED_USERS` sont écoutés ; les cartes sont envoyées en message privé au premier ID de la liste.
 
 ## Clés et réglages
@@ -29,7 +30,7 @@ Depuis le poste de dev (le compte SSH doit avoir sudo sans mot de passe ; les fi
 deploy/install_plugin.sh <hôte-ssh>
 ```
 
-Le script copie le plugin dans `~hermes/.hermes/plugins/todoist-assistant`, l'active (`hermes plugins enable`), autorise l'injection côté gateway et redémarre `hermes-gateway`. Préalables : Hermes installé pour l'utilisateur `hermes`, `rsync` des deux côtés, jeton Todoist posé dans le fichier ci-dessus. Vérifier : `journalctl --user -u hermes-gateway --since -2min`.
+Le script copie le plugin dans `~hermes/.hermes/plugins/todoist-assistant`, l'active (`hermes plugins enable`) et redémarre `hermes-gateway`. Préalables : Hermes installé pour l'utilisateur `hermes`, `rsync` des deux côtés, et **le fichier du jeton Todoist doit exister avant l'installation** (sinon le plugin refuse de se charger). Vérifier : `journalctl --user -u hermes-gateway --since -2min`.
 
 ## Isolation (à lire)
 
@@ -55,19 +56,21 @@ Projet Todoist **Bot-test**, sur le VPS ; cocher chaque point.
 - [ ] 2. Vocal « ajoute acheter du pain demain dans Bot-test » → **📝 Créer une tâche** → carte Todoist → **Valider** → tâche visible dans Todoist.
 - [ ] 3. Vocal → **✖️ Annuler** → Hermes ne reçoit rien.
 - [ ] 4. `/t acheter du lait vendredi` → carte Todoist.
-- [ ] 5. `/new` puis vocal → **💬 Discuter** → « Réponds ok » → `ok` → Hermes répond à la transcription.
+- [ ] 5. `/new` puis vocal → **💬 Discuter** → « ✅ Reçu par Hermes » et Hermes répond directement à la transcription, sans autre étape. Idem après `systemctl --user restart hermes-gateway`.
 - [ ] 6. « le pain c'est fait » → carte **Terminer** → Valider.
-- [ ] 7. Carte → **Modifier** → « plutôt samedi » → l'ancienne carte passe à « ↪️ Remplacé » et une nouvelle arrive.
+- [ ] 7. Carte → **Modifier** → « plutôt samedi » (tapé, puis une autre fois dicté → **Discuter**) → l'ancienne carte passe à « ↪️ Remplacé » et une nouvelle arrive.
 - [ ] 8. Double clic sur **Valider** → une seule tâche créée.
 - [ ] 9. « rappelle-moi d'appeler le plombier lundi » (sans bouton) → carte Todoist, sans cron ni liste interne : vérifier `hermes cron list` et l'absence de fichier créé.
 - [ ] 10. Demander à Hermes d'écrire lui-même dans Todoist via le terminal ou `curl` → impossible (clé introuvable).
 - [ ] 11. Bouton natif de Hermes (question `clarify` ou approbation) → fonctionne toujours.
 - [ ] 12. Message d'un autre compte Telegram → aucune réaction.
 - [ ] 13. `systemctl --user restart hermes-gateway`, puis clic sur une carte Todoist envoyée avant → fonctionne. Clic sur une carte vocale d'avant → « expiré ou déjà traité ».
+- [ ] 14. `systemctl --user restart hermes-gateway`, puis **comme toute première action** `/t acheter du lait vendredi` → carte Todoist (pas de « Telegram n'est pas connecté »).
 
 ## Recette courte après chaque `hermes update`
 
 1. Contrôles de sécurité de `deploy/sandbox.md` (section « Après chaque `hermes update` »).
 2. Vocal → la carte à 3 boutons apparaît.
-3. `/t acheter du lait vendredi` → carte Todoist.
-4. **Valider** → tâche créée dans Todoist (puis la supprimer).
+3. `/t acheter du lait vendredi` (première action après le redémarrage) → carte Todoist.
+4. Vocal → **💬 Discuter** → « ✅ Reçu par Hermes » et réponse de Hermes.
+5. **Valider** → tâche créée dans Todoist (puis la supprimer).

@@ -68,12 +68,12 @@ Points d'API documentés (non testés) à utiliser : hook `pre_gateway_dispatch`
 1. Le plugin intercepte le vocal (utilisateur autorisé uniquement ; sinon il laisse Hermes l'ignorer ou l'ignore lui-même).
 2. Transcription via la fonction de Hermes. Échec ou texte vide : mêmes messages que la spec v1 (§5), avec `[🔁 Réessayer]`.
 3. Carte : `🎙️ « … »` + **[💬 Discuter] [📝 Créer une tâche] [✖️ Annuler]**.
-4. *Discuter* : le texte est transmis à Hermes tel quel. *Créer une tâche* : il est transmis **marqué comme demande de création de tâche** (§5.3). *Annuler* : rien ne part.
-5. La carte est éditée avec l'état réel (« ✅ Envoyé », « 📝 Envoyé comme tâche », « ✖️ Annulé »). Un double clic ne transmet qu'une fois. Une carte non traitée expire (durée au choix du constructeur, ~24 h comme la spec v1).
+4. *Discuter* : le texte est transmis à Hermes tel quel, **immédiatement et sans autre validation** (y compris en session neuve après `/new` ou après un redémarrage de la gateway). *Créer une tâche* : il est transmis **marqué comme demande de création de tâche** (§5.3). *Annuler* : rien ne part. Transmission : le plugin remet au cœur Telegram de Hermes un message **texte** synthétique de l'utilisateur (le vocal d'origine, sans le média, avec la transcription pour texte) ; Hermes le traite comme un vrai message tapé (§6.1).
+5. La carte est éditée avec l'état réel (« ⏳ Transmis à Hermes… » puis « ✅ Reçu par Hermes » / « 📝 Reçu par Hermes comme tâche », ou « ✖️ Annulé »). Sans confirmation de réception en 180 s : « ⚠️ Hermes n'a pas confirmé la réception. » avec **[🔁 Renvoyer]** (un seul renvoi). Un double clic ne transmet qu'une fois. Si une correction *Modifier* (§5.4) est attendue, la transcription validée sert de correction. Une carte non traitée expire (durée au choix du constructeur, ~24 h comme la spec v1).
 
 ### 5.2 Texte
 - `/t <texte>` : équivaut à « Créer une tâche » pour un message tapé. Implémentation recommandée : réécriture via `pre_gateway_dispatch` (le message reste un vrai message humain, donc pas de problème de session).
-- Tout autre texte : va à Hermes sans intervention du plugin (sauf mode *Modifier*, §5.4, et repli « ok », §6).
+- Tout autre texte : va à Hermes sans intervention du plugin (sauf mode *Modifier*, §5.4).
 
 ### 5.3 Marquage « tâche »
 Le texte transmis porte un marqueur explicite (forme au choix du constructeur, ex. `[Créer une tâche Todoist] acheter du pain demain`). Une consigne fournie par le plugin (skill et/ou section de prompt) dit à Hermes :
@@ -92,7 +92,7 @@ Repris de la spec v1 (§4 points 3–5, statuts, erreurs) avec ces changements :
 
 ## 6. Contraintes et points durs
 
-1. **Injection refusée en début de session.** L'injection n'aboutit que si la session Hermes contient déjà un message humain validé. Le plugin doit détecter le refus réel (pas seulement le `True` d'`inject_message` : la gateway peut refuser après coup, de façon asynchrone) **ou** l'éviter. Repli validé avec l'utilisateur : la carte indique « réponds *ok* pour envoyer », et le message *ok* (vrai message humain) est réécrit en la transcription (avec marqueur si « Créer une tâche ») via `pre_gateway_dispatch`. Le constructeur choisit comment détecter le cas (ex. tester l'existence d'un tour humain dans la session avant d'injecter, ou toujours passer par le repli quand la session est neuve).
+1. **Injection refusée en début de session.** `inject_message` n'aboutit que si la session Hermes contient déjà un message humain validé (et le suivi de ces tours, en mémoire, se perd à chaque redémarrage). Le repli « réponds *ok* » d'abord retenu est **abandonné** à la demande de l'utilisateur (« Discuter » doit envoyer directement). Solution retenue : le plugin n'injecte plus ; il soumet à l'application Telegram de Hermes (`application.process_update`) un update **texte** synthétique construit à partir du vocal d'origine (même chat, même auteur, même `message_id`, média retiré, `text` = transcription), avec un `update_id` négatif unique pour ne pas être écarté par la déduplication des updates de Hermes (reçus d'admission) ni toucher à l'offset de polling. Le cœur le traite comme un message tapé (tour humain réel). Le hook `pre_gateway_dispatch` ne l'interprète jamais comme `/t` ; un vocal brut du propriétaire y est écarté (`skip`) en second garde-fou.
 2. **La clé Todoist ne doit pas être accessible à l'agent.** Aujourd'hui `terminal.backend: local` : les outils de l'agent s'exécutent sous l'utilisateur `hermes`, et tout ce que le plugin peut lire, l'agent le peut aussi. **Décision de l'utilisateur : passer les outils de Hermes dans un conteneur Docker** (`terminal.backend: docker`). D'après la doc Hermes, le conteneur sert au `terminal`, à `execute_code` et aux outils de fichiers. À faire :
    - installer Docker (root, via le compte `claude`) et donner à `hermes` le droit de l'utiliser **en mode rootless** de préférence (le groupe `docker` équivaut à root sur l'hôte, ce qui annulerait le retrait du sudo) — si le mode rootless pose problème, revenir vers l'utilisateur avant d'utiliser le groupe `docker` ;
    - n'exposer dans le conteneur ni `~/.hermes` (`.env`, base du plugin, config), ni la clé Todoist (`TODOIST_API_TOKEN` hors des variables transmises au conteneur) ; garder `docker_mount_cwd_to_workspace: false` ;
@@ -117,7 +117,7 @@ Repris de la spec v1 (§4 points 3–5, statuts, erreurs) avec ces changements :
 ## 8. Déploiement
 
 - Le plugin vit dans le dépôt (emplacement au choix du constructeur) et est installé dans `~/.hermes/plugins/<nom>/` de l'utilisateur `hermes`, avec ses dépendances Python (`todoist-api-python`, `pydantic`) préparées selon le mécanisme de dépendances des plugins Hermes.
-- Activation : `hermes plugins enable <nom>`, `plugins.entries.<nom>.allow_gateway_injection: true`, redémarrage de `hermes-gateway`.
+- Activation : `hermes plugins enable <nom>`, redémarrage de `hermes-gateway`.
 - Base SQLite des propositions dans un dossier de données du plugin, persistant aux redémarrages.
 - Supprimer et désactiver `voice-confirm-spike`.
 - Mise à jour du README : installation du plugin, clés, recette.
@@ -125,8 +125,8 @@ Repris de la spec v1 (§4 points 3–5, statuts, erreurs) avec ces changements :
 ## 9. Tests
 
 - TDD pytest, en reprenant les tests existants des modules réutilisés.
-- Le cœur du plugin (cartes, transitions, réécritures, marquage, repli « ok ») doit être testable **sans Hermes ni Telegram**, avec des faux pour la transcription, l'injection et l'envoi Telegram, comme `controller` l'était en v1.
-- Recette manuelle sur le VPS (projet Todoist « Bot-test ») : la liste de la spec v1 §4 du README, plus : vocal → Envoyer ; vocal → Créer une tâche → Valider ; vocal → Annuler ; `/t` ; vocal comme premier message après `/new` (repli « ok ») ; « le pain c'est fait » → carte Terminer ; demande de tâche ⇒ jamais de liste interne ni de cron ; tentative de faire écrire Todoist par l'agent via le terminal ⇒ impossible (selon la solution du §6.2) ; boutons natifs de Hermes toujours fonctionnels.
+- Le cœur du plugin (cartes, transitions, réécritures, marquage) doit être testable **sans Hermes ni Telegram**, avec des faux pour la transcription, la soumission à Hermes et l'envoi Telegram, comme `controller` l'était en v1.
+- Recette manuelle sur le VPS (projet Todoist « Bot-test ») : la liste de la spec v1 §4 du README, plus : vocal → Envoyer ; vocal → Créer une tâche → Valider ; vocal → Annuler ; `/t` ; vocal comme premier message après `/new` (envoi direct) ; « le pain c'est fait » → carte Terminer ; demande de tâche ⇒ jamais de liste interne ni de cron ; tentative de faire écrire Todoist par l'agent via le terminal ⇒ impossible (selon la solution du §6.2) ; boutons natifs de Hermes toujours fonctionnels.
 
 ## 10. Laissé au constructeur
 

@@ -19,7 +19,6 @@ cd ~
 # Toute commande lisant stdin reçoit `yes` ou /dev/null : sinon elle avalerait la suite du script.
 # `yes` accepte la préparation des dépendances proposée par `hermes plugins enable`.
 yes | hermes plugins enable todoist-assistant || { echo "échec de hermes plugins enable" >&2; exit 1; }
-hermes config set plugins.entries.todoist-assistant.allow_gateway_injection true </dev/null
-XDG_RUNTIME_DIR=/run/user/1001 systemctl --user restart hermes-gateway </dev/null
+XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart hermes-gateway </dev/null
 echo "todoist-assistant installé ; vérifier : journalctl --user -u hermes-gateway --since -2min"
 REMOTE

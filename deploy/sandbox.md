@@ -260,8 +260,18 @@ Les deux skills de sonde ont été retirés (`~/.hermes/skills/probe-env-operato
 
 ## Retour arrière
 
+Deux sauvegardes de `config.yaml` existent :
+
+- `config.yaml.bak-sandbox` : **avant tout le durcissement** (conteneur Docker, mais aussi avant la
+  désactivation de `browser` / `connections` et avant `skills.write_approval`). La restaurer annule
+  donc tout : retour complet.
+- `config.yaml.bak-sandbox-fix1` : après le passage au conteneur, **avant** le second durcissement
+  (`browser`, `connections`, `skills.write_approval`). Pour un retour partiel (garder le conteneur,
+  annuler seulement ce second durcissement), restaurer celle-ci à la place.
+
 ```bash
-sudo -iu hermes bash -c 'cp -p ~/.hermes/config.yaml.bak-sandbox ~/.hermes/config.yaml && XDG_RUNTIME_DIR=/run/user/1001 systemctl --user restart hermes-gateway'
+# retour complet (adapter le nom du fichier pour un retour partiel : config.yaml.bak-sandbox-fix1)
+sudo -iu hermes bash -c 'cp -p ~/.hermes/config.yaml.bak-sandbox ~/.hermes/config.yaml && XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart hermes-gateway'
 ```
 
 (Le retour à `terminal.backend: local` rend de nouveau lisible par l'agent tout ce que `hermes` peut
