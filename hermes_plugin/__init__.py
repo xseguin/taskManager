@@ -193,7 +193,8 @@ class _Plugin:
             await self.on_callback(update, context)
             raise ApplicationHandlerStop  # préfixe ta: propre au plugin
 
-        application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
+        application.add_handler(MessageHandler(
+            filters.ChatType.PRIVATE & (filters.VOICE | filters.AUDIO), voice_handler))
         application.add_handler(CallbackQueryHandler(callback_handler, pattern=r"^ta:"))
         log.info("todoist-assistant branché sur Telegram")
 
@@ -224,6 +225,9 @@ class _Plugin:
         parsed = parse_callback(query.data)
         message = getattr(query, "message", None)
         if parsed is None or message is None:
+            return
+        # Les cartes ne vivent que dans le message privé du propriétaire.
+        if getattr(getattr(message, "chat", None), "type", None) != "private":
             return
         kind, verb, key = parsed
         chat_id, message_id = str(message.chat_id), message.message_id

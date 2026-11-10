@@ -8,7 +8,7 @@ DEST=/home/hermes/.hermes/plugins/todoist-assistant
 AS_HERMES="sudo -n -u hermes"
 
 ssh "$HOST" "cd / && $AS_HERMES mkdir -p $DEST"
-rsync -a --exclude __pycache__ --rsync-path="$AS_HERMES rsync" \
+rsync -a --delete --filter='P assistant/' --exclude __pycache__ --rsync-path="$AS_HERMES rsync" \
     "$ROOT/hermes_plugin/" "$HOST:$DEST/"
 rsync -a --delete --exclude __pycache__ --rsync-path="$AS_HERMES rsync" \
     "$ROOT/assistant/" "$HOST:$DEST/assistant/"
@@ -16,9 +16,10 @@ rsync -a --delete --exclude __pycache__ --rsync-path="$AS_HERMES rsync" \
 ssh "$HOST" "cd / && $AS_HERMES -H bash -l -s" <<'REMOTE'
 set -eu
 cd ~
+# Toute commande lisant stdin reçoit `yes` ou /dev/null : sinon elle avalerait la suite du script.
 # `yes` accepte la préparation des dépendances proposée par `hermes plugins enable`.
 yes | hermes plugins enable todoist-assistant || { echo "échec de hermes plugins enable" >&2; exit 1; }
-hermes config set plugins.entries.todoist-assistant.allow_gateway_injection true
-XDG_RUNTIME_DIR=/run/user/1001 systemctl --user restart hermes-gateway
+hermes config set plugins.entries.todoist-assistant.allow_gateway_injection true </dev/null
+XDG_RUNTIME_DIR=/run/user/1001 systemctl --user restart hermes-gateway </dev/null
 echo "todoist-assistant installé ; vérifier : journalctl --user -u hermes-gateway --since -2min"
 REMOTE

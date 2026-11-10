@@ -120,6 +120,11 @@ def test_pre_llm_call_without_loop_does_not_raise(registered):
                 model="m", platform="telegram") is None
 
 
+def _msg(chat_id, chat_type="private"):
+    return SimpleNamespace(chat_id=chat_id, message_id=5,
+                           chat=SimpleNamespace(id=chat_id, type=chat_type))
+
+
 async def test_callback_from_unknown_user_is_ignored(registered, monkeypatch):
     import hermes_plugin
     called = []
@@ -134,11 +139,11 @@ async def test_callback_from_unknown_user_is_ignored(registered, monkeypatch):
         answered.append(True)
     query = SimpleNamespace(data="ta:v:send:abc", answer=answer,
                             from_user=SimpleNamespace(id=99),
-                            message=SimpleNamespace(chat_id=99, message_id=5))
+                            message=_msg(99))
     await plugin.on_callback(SimpleNamespace(callback_query=query), None)
     assert answered and not called
     query.from_user = SimpleNamespace(id=42)
-    query.message = SimpleNamespace(chat_id=42, message_id=5)
+    query.message = _msg(42)
     await plugin.on_callback(SimpleNamespace(callback_query=query), None)
     assert called == [("42", 5, "send", "abc")]
 
@@ -198,3 +203,108 @@ async def test_tick_loop_survives_messenger_errors(registered, monkeypatch):
         await asyncio.sleep(0)
     task.cancel()
     assert len(calls) >= 3
+
+
+class FakeApplication:
+    def __init__(self):
+        self.bot = object()
+        self.handlers = []
+
+    def add_handler(self, handler, group=0):
+        self.handlers.append(handler)
+
+
+@pytest.fixture
+async def wired(registered):
+    import hermes_plugin
+    plugin = hermes_plugin._STATE
+    app = FakeApplication()
+    registered.platform_handlers["telegram"](app, None)
+    yield plugin, app
+    if plugin._tick_task is not None:
+        plugin._tick_task.cancel()
+
+
+def _handlers(app):
+    from telegram.ext import CallbackQueryHandler, MessageHandler
+    voice = [h for h in app.handlers if isinstance(h, MessageHandler)]
+    cb = [h for h in app.handlers if isinstance(h, CallbackQueryHandler)]
+    assert len(voice) == 1 and len(cb) == 1
+    return voice[0], cb[0]
+
+
+def _tg_voice_update(chat_type):
+    from datetime import datetime, timezone
+
+    from telegram import Chat, Message, Update, User, Voice
+    msg = Message(message_id=1, date=datetime.now(timezone.utc), chat=Chat(42, chat_type),
+                  from_user=User(42, "x", False),
+                  voice=Voice(file_id="f", file_unique_id="u", duration=1))
+    return Update(1, message=msg)
+
+
+async def test_wire_registers_private_voice_and_ta_callback_handlers(wired):
+    plugin, app = wired
+    voice, cb = _handlers(app)
+    assert plugin.bot is app.bot and plugin.loop is not None
+    assert voice.check_update(_tg_voice_update("private"))
+    assert not voice.check_update(_tg_voice_update("group"))
+    assert cb.pattern.pattern == r"^ta:"
+
+
+def _voice_update(user_id, fail=False):
+    async def get_file():
+        if fail:
+            raise RuntimeError("download failed")
+        async def download_as_bytearray():
+            return bytearray(b"audio")
+        return SimpleNamespace(download_as_bytearray=download_as_bytearray)
+    msg = SimpleNamespace(chat_id=user_id, voice=SimpleNamespace(get_file=get_file), audio=None)
+    return SimpleNamespace(effective_user=SimpleNamespace(id=user_id), effective_message=msg)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_authorized_voice_is_processed_and_stops_core(wired, monkeypatch, fail):
+    from telegram.ext import ApplicationHandlerStop
+    plugin, app = wired
+    seen = []
+
+    async def on_voice(chat_id, audio):
+        seen.append((chat_id, audio))
+    monkeypatch.setattr(plugin.voice, "on_voice", on_voice)
+    voice, _ = _handlers(app)
+    with pytest.raises(ApplicationHandlerStop):
+        await voice.callback(_voice_update(42, fail=fail), None)
+    assert seen == ([] if fail else [("42", b"audio")])
+
+
+async def test_unauthorized_voice_is_left_to_hermes(wired, monkeypatch):
+    plugin, app = wired
+    seen = []
+
+    async def on_voice(chat_id, audio):
+        seen.append(chat_id)
+    monkeypatch.setattr(plugin.voice, "on_voice", on_voice)
+    voice, _ = _handlers(app)
+    await voice.callback(_voice_update(99), None)  # ne lève pas ApplicationHandlerStop
+    assert seen == []
+
+
+async def test_callback_outside_private_chat_is_not_dispatched(wired, monkeypatch):
+    from telegram.ext import ApplicationHandlerStop
+    plugin, app = wired
+    called = []
+
+    async def on_button(*a):
+        called.append(a)
+    monkeypatch.setattr(plugin.voice, "on_button", on_button)
+    answered = []
+
+    async def answer():
+        answered.append(True)
+    _, cb = _handlers(app)
+    query = SimpleNamespace(data="ta:v:send:abc", answer=answer, from_user=SimpleNamespace(id=42),
+                            message=_msg(-100, "group"))
+    with pytest.raises(ApplicationHandlerStop):
+        await cb.callback(SimpleNamespace(callback_query=query), None)
+    assert answered and not called
