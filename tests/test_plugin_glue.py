@@ -41,8 +41,17 @@ def fake_ctx():
 
 
 @pytest.fixture
-def registered(fake_ctx, monkeypatch, tmp_path):
-    monkeypatch.setenv("TODOIST_API_TOKEN", "t")
+def token_path(monkeypatch, tmp_path):
+    import hermes_plugin
+    p = tmp_path / "cfg" / "token"
+    p.parent.mkdir()
+    p.write_text("t\n")
+    monkeypatch.setattr(hermes_plugin, "_token_file", lambda: p)
+    return p
+
+
+@pytest.fixture
+def registered(fake_ctx, monkeypatch, tmp_path, token_path):
     monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "42")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     register(fake_ctx)
@@ -56,8 +65,8 @@ def test_parse_callback(data, expected):
     assert parse_callback(data) == expected
 
 
-def test_register_wires_everything(fake_ctx, monkeypatch, tmp_path):
-    monkeypatch.setenv("TODOIST_API_TOKEN", "t"); monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "42")
+def test_register_wires_everything(fake_ctx, monkeypatch, tmp_path, token_path):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "42")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     register(fake_ctx)
     assert set(fake_ctx.tools) == {"todoist_list_projects", "todoist_search_tasks",
@@ -308,3 +317,23 @@ async def test_callback_outside_private_chat_is_not_dispatched(wired, monkeypatc
     with pytest.raises(ApplicationHandlerStop):
         await cb.callback(SimpleNamespace(callback_query=query), None)
     assert answered and not called
+
+
+def test_token_file_is_under_running_users_home(monkeypatch):
+    import pwd
+    import hermes_plugin
+    monkeypatch.setenv("HOME", "/nonexistent-home")
+    home = pwd.getpwuid(__import__("os").getuid()).pw_dir
+    assert hermes_plugin._token_file() == hermes_plugin.Path(home) / ".config" / "todoist-assistant" / "token"
+
+
+def test_register_reads_token_file_and_scrubs_env(fake_ctx, monkeypatch, tmp_path, token_path):
+    import os
+    import hermes_plugin
+    monkeypatch.setenv("TODOIST_API_TOKEN", "from-env")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USERS", "42")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    register(fake_ctx)
+    assert hermes_plugin._STATE.cfg.todoist_token == "t"
+    assert "TODOIST_API_TOKEN" not in os.environ
+    assert "t" not in [v for k, v in os.environ.items() if "TODOIST" in k.upper()]

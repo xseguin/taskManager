@@ -11,7 +11,7 @@ Spec : `docs/superpowers/specs/2026-11-09-assistant-vocal-taches-design.md`
 | `TELEGRAM_BOT_TOKEN` | Dans Telegram, écrire à **@BotFather** → `/newbot` → copier le jeton. |
 | `TELEGRAM_ALLOWED_USER_ID` | Écrire à **@userinfobot** : il répond avec ton identifiant numérique. |
 | `ANTHROPIC_API_KEY` | console.anthropic.com → API Keys. **Fixe un plafond de dépense mensuel** (Settings → Limits), par ex. 5 $. |
-| `TODOIST_API_TOKEN` | Todoist → Paramètres → Intégrations → Développeur → jeton d'API. |
+| `TODOIST_API_TOKEN` | Todoist → Paramètres → Intégrations → Développeur → jeton d'API. **Plugin Hermes :** jamais dans `~/.hermes/.env` ; le mettre dans `~/.config/todoist-assistant/token` (dossier 0700, fichier 0600) de l'utilisateur `hermes`, voir `deploy/sandbox.md`. |
 | `GROQ_API_KEY` | console.groq.com → API Keys. |
 
 ## 2. Installer sur le VPS

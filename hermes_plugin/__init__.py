@@ -307,9 +307,17 @@ def _data_dir() -> Path:
     return Path(home) / "plugin-data" / PLUGIN_NAME
 
 
+def _token_file() -> Path:
+    """Jeton Todoist : hors de HERMES_HOME, dans le home réel de l'utilisateur qui fait tourner Hermes."""
+    import pwd
+    return Path(pwd.getpwuid(os.getuid()).pw_dir) / ".config" / PLUGIN_NAME / "token"
+
+
 def register(ctx) -> None:
     global _STATE
-    cfg = load_config(os.environ, _data_dir())
+    # Un ancien jeton laissé dans l'environnement pourrait être transmis au conteneur de l'agent.
+    os.environ.pop("TODOIST_API_TOKEN", None)
+    cfg = load_config(os.environ, _data_dir(), _token_file())
     plugin = _Plugin(ctx, cfg)
     _STATE = plugin
 
