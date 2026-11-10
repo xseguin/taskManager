@@ -93,3 +93,13 @@ class FakeTodoist:
         self._require(task_id)
         del self.tasks[task_id]
 
+
+
+class FakeInjector:
+    def __init__(self):
+        self.calls: list[tuple[str, str]] = []
+        self.accept = True
+
+    def inject(self, chat_id: str, text: str) -> bool:
+        self.calls.append((chat_id, text))
+        return self.accept
