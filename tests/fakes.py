@@ -103,3 +103,17 @@ class FakeInjector:
     def inject(self, chat_id: str, text: str) -> bool:
         self.calls.append((chat_id, text))
         return self.accept
+
+
+class FakeMessenger:
+    def __init__(self):
+        self.sent: list[tuple[str, str, list | None]] = []
+        self.edits: list[tuple[str, int, str, list | None]] = []
+        self._ids = count(1)
+
+    async def send(self, chat_id, text, buttons=None) -> int:
+        self.sent.append((chat_id, text, buttons))
+        return next(self._ids)
+
+    async def edit(self, chat_id, message_id, text, buttons=None) -> None:
+        self.edits.append((chat_id, message_id, text, buttons))
