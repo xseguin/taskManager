@@ -50,10 +50,10 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]' && .venv/bin/pytest -
 
 ## Recette complète (avant usage réel)
 
-Projet Todoist **Bot-test**, sur le VPS ; cocher chaque point.
+Sur le VPS, dans la boîte de réception Todoist (aucun projet à préciser) ; cocher chaque point, puis supprimer les tâches de test.
 
 - [ ] 1. Vocal → carte à 3 boutons → **💬 Discuter** → « ⏳ Transmis à Hermes… » puis « ✅ Reçu par Hermes », et réponse de Hermes.
-- [ ] 2. Vocal « ajoute acheter du pain demain dans Bot-test » → **📝 Créer une tâche** → carte Todoist → **Valider** → tâche visible dans Todoist.
+- [ ] 2. Vocal « ajoute acheter du pain demain » → **📝 Créer une tâche** → carte Todoist → **Valider** → tâche visible dans Todoist.
 - [ ] 3. Vocal → **✖️ Annuler** → Hermes ne reçoit rien.
 - [ ] 4. `/t acheter du lait vendredi` → carte Todoist.
 - [ ] 5. `/new` puis vocal → **💬 Discuter** → « ✅ Reçu par Hermes » et Hermes répond directement à la transcription, sans autre étape. Idem après `systemctl --user restart hermes-gateway`.
