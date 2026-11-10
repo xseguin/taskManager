@@ -39,8 +39,8 @@ def test_normal_priority_not_shown(make_proposal):
 
 
 def test_buttons():
-    assert [b.data for b in proposal_buttons("abc")] == ["ok:abc", "edit:abc", "cancel:abc"]
-    assert retry_remaining_button("abc").data == "retry:abc"
+    assert [b.data for b in proposal_buttons("abc")] == ["ta:p:ok:abc", "ta:p:edit:abc", "ta:p:cancel:abc"]
+    assert retry_remaining_button("abc").data == "ta:p:retry:abc"
 
 
 def test_done_results_with_link(make_proposal):

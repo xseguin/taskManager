@@ -58,12 +58,12 @@ def render_proposal(p: Proposal) -> str:
 
 
 def proposal_buttons(proposal_id: str) -> list[Button]:
-    return [Button("✅ Valider", f"ok:{proposal_id}"), Button("✏️ Modifier", f"edit:{proposal_id}"),
-            Button("❌ Annuler", f"cancel:{proposal_id}")]
+    return [Button("✅ Valider", f"ta:p:ok:{proposal_id}"), Button("✏️ Modifier", f"ta:p:edit:{proposal_id}"),
+            Button("❌ Annuler", f"ta:p:cancel:{proposal_id}")]
 
 
 def retry_remaining_button(proposal_id: str) -> Button:
-    return Button("🔁 Réessayer ce qui reste", f"retry:{proposal_id}")
+    return Button("🔁 Réessayer ce qui reste", f"ta:p:retry:{proposal_id}")
 
 
 def render_results(p: Proposal) -> str:
