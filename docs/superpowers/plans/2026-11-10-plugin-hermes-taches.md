@@ -34,7 +34,7 @@
 
 ---
 
-### Tâche 1 : Retirer le bot autonome v1 et préparer le paquet
+### Task 1 : Retirer le bot autonome v1 et préparer le paquet
 
 **Files :**
 - Delete : `assistant/agent/agent.py`, `assistant/agent/prompt.py`, `assistant/agent/tools.py`, `assistant/agent/__init__.py`, `assistant/bot.py`, `assistant/main.py`, `assistant/controller.py`, `assistant/conversation_store.py`, `assistant/transcriber.py`, `deploy/assistant.service`, `evals/`, `.env.example`, `tests/test_agent.py`, `tests/test_agent_tools.py`, `tests/test_bot.py`, `tests/test_controller.py`, `tests/test_conversation_store.py`, `tests/test_transcriber.py`, `tests/test_evals_scoring.py`
@@ -87,7 +87,7 @@ git add -A && git commit -m "refactor: retirer le bot autonome v1, préparer le 
 
 ---
 
-### Tâche 2 : Relais vers Hermes (réécritures, repli « ok », suivi des sessions)
+### Task 2 : Relais vers Hermes (réécritures, repli « ok », suivi des sessions)
 
 **Files :**
 - Create : `assistant/hermes/ports.py`, `assistant/hermes/relay.py`, `assistant/hermes/prompt.py`
@@ -182,7 +182,7 @@ git commit -m "feat: relais vers Hermes (/t, repli ok, modification)"
 
 ---
 
-### Tâche 3 : Parcours vocal (carte, boutons, confirmation de réception)
+### Task 3 : Parcours vocal (carte, boutons, confirmation de réception)
 
 **Files :**
 - Create : `assistant/hermes/voice.py`
@@ -308,7 +308,7 @@ git commit -m "feat: parcours vocal avec validation et confirmation de réceptio
 
 ---
 
-### Tâche 4 : Outils Todoist et cartes de proposition
+### Task 4 : Outils Todoist et cartes de proposition
 
 **Files :**
 - Create : `assistant/hermes/todoist_tools.py`
@@ -417,7 +417,7 @@ git add -A && git commit -m "feat: outils Todoist et cartes de proposition valid
 
 ---
 
-### Tâche 5 : Colle Hermes, installation et remplacement de l'essai
+### Task 5 : Colle Hermes, installation et remplacement de l'essai
 
 **Files :**
 - Create : `hermes_plugin/plugin.yaml`, `hermes_plugin/pyproject.toml`, `hermes_plugin/__init__.py`, `deploy/install_plugin.sh`
@@ -492,7 +492,7 @@ git commit -m "feat: plugin Hermes todoist-assistant et script d'installation"
 
 ---
 
-### Tâche 6 : Isoler les outils de l'agent dans Docker rootless
+### Task 6 : Isoler les outils de l'agent dans Docker rootless
 
 Tâche d'exploitation sur le VPS. Les commandes root passent par `ssh hermes-vps` (compte `claude`), celles de l'utilisateur par `sudo -iu hermes`.
 
@@ -530,7 +530,7 @@ git add deploy/sandbox.md && git commit -m "ops: outils de l'agent Hermes isolé
 
 ---
 
-### Tâche 7 : README et recette complète
+### Task 7 : README et recette complète
 
 **Files :**
 - Modify : `README.md` (réécrit pour le plugin : clés `TODOIST_API_TOKEN` et `GROQ_API_KEY` dans `~/.hermes/.env`, installation via `deploy/install_plugin.sh`, isolation Docker → `deploy/sandbox.md`, recette ci-dessous, et la recette courte à relancer après chaque `hermes update` : vocal → carte, `/t` → carte Todoist, Valider)
