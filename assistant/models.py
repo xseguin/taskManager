@@ -1,7 +1,6 @@
-"""Types de données partagés : actions, propositions, résultats de l'agent."""
+"""Types de données partagés : actions, propositions, résultats."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
@@ -74,27 +73,3 @@ class Proposal(BaseModel):
     expires_at: datetime
     message_id: int | None = None
     results: list[ActionResult] = []
-
-
-@dataclass(frozen=True)
-class ProposalDraft:
-    actions: list[Action]
-
-
-@dataclass(frozen=True)
-class Answer:
-    text: str
-
-
-@dataclass(frozen=True)
-class Clarification:
-    question: str
-    options: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class AgentFailure:
-    message: str
-
-
-AgentResult = ProposalDraft | Answer | Clarification | AgentFailure

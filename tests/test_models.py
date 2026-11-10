@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from assistant.models import Action, Answer, Proposal
+from assistant.models import Action, Proposal
 
 
 def test_create_requires_content():
@@ -33,6 +33,3 @@ def test_proposal_roundtrip_json(now):
                  source_text="x", created_at=now, expires_at=now + timedelta(hours=24))
     assert Proposal.model_validate_json(p.model_dump_json()) == p
 
-
-def test_agent_results_compare_by_value():
-    assert Answer("x") == Answer("x")
