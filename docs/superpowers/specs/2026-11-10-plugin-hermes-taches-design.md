@@ -67,8 +67,8 @@ Points d'API documentés (non testés) à utiliser : hook `pre_gateway_dispatch`
 ### 5.1 Vocal
 1. Le plugin intercepte le vocal (utilisateur autorisé uniquement ; sinon il laisse Hermes l'ignorer ou l'ignore lui-même).
 2. Transcription via la fonction de Hermes. Échec ou texte vide : mêmes messages que la spec v1 (§5), avec `[🔁 Réessayer]`.
-3. Carte : `🎙️ « … »` + **[💬 Envoyer] [📝 Créer une tâche] [✖️ Annuler]**.
-4. *Envoyer* : le texte est transmis à Hermes tel quel. *Créer une tâche* : il est transmis **marqué comme demande de création de tâche** (§5.3). *Annuler* : rien ne part.
+3. Carte : `🎙️ « … »` + **[💬 Discuter] [📝 Créer une tâche] [✖️ Annuler]**.
+4. *Discuter* : le texte est transmis à Hermes tel quel. *Créer une tâche* : il est transmis **marqué comme demande de création de tâche** (§5.3). *Annuler* : rien ne part.
 5. La carte est éditée avec l'état réel (« ✅ Envoyé », « 📝 Envoyé comme tâche », « ✖️ Annulé »). Un double clic ne transmet qu'une fois. Une carte non traitée expire (durée au choix du constructeur, ~24 h comme la spec v1).
 
 ### 5.2 Texte

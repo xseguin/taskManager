@@ -73,7 +73,7 @@ class VoiceFlow:
         key = self._new_key()
         entry = _Entry(chat_id, self._clock(), text=text)
         self._entries[key] = entry
-        buttons = [Button("💬 Envoyer", f"ta:v:send:{key}"),
+        buttons = [Button("💬 Discuter", f"ta:v:send:{key}"),
                    Button("📝 Créer une tâche", f"ta:v:task:{key}"),
                    Button("✖️ Annuler", f"ta:v:cancel:{key}")]
         entry.message_id = await self._messenger.send(chat_id, self._head(text), buttons)

@@ -27,7 +27,7 @@
 ## Review Focus
 
 1. **Texte transcrit contenant du HTML ou des chevrons** (« a < b ») : la carte s'affiche sans erreur Telegram de parsing. Test `test_voice_card_escapes_html` (Tâche 3).
-2. **Double clic sur « Envoyer »** : un seul `inject` a lieu. Test `test_double_send_injects_once` (Tâche 3).
+2. **Double clic sur « Discuter »** : un seul `inject` a lieu. Test `test_double_send_injects_once` (Tâche 3).
 3. **« ok » tapé sans repli armé** : il part à Hermes tel quel, sans réécriture. Test `test_ok_without_pending_is_untouched` (Tâche 2).
 4. **Message d'un utilisateur non autorisé commençant par `/t` ou valant `ok`** : aucune réécriture et aucune fuite d'une transcription en attente. Test `test_rewrite_ignores_unauthorized_user` (Tâche 2).
 5. **Proposition remplacée ou expirée, puis clic sur l'ancienne carte** : « expirée ou déjà traitée », sans exécution. Test `test_click_on_replaced_proposal_refused` (Tâche 4).
@@ -202,7 +202,7 @@ Textes exacts :
 
 | Situation | Texte de la carte | Boutons |
 |---|---|---|
-| Transcription OK | `🎙️ « {texte} »` | `💬 Envoyer` `ta:v:send:<k>` · `📝 Créer une tâche` `ta:v:task:<k>` · `✖️ Annuler` `ta:v:cancel:<k>` |
+| Transcription OK | `🎙️ « {texte} »` | `💬 Discuter` `ta:v:send:<k>` · `📝 Créer une tâche` `ta:v:task:<k>` · `✖️ Annuler` `ta:v:cancel:<k>` |
 | Texte vide | `Je n'ai pas compris, tu peux répéter ou l'écrire ?` | — |
 | Échec de transcription | `⚠️ La transcription a échoué.` | `🔁 Réessayer` `ta:v:again:<k>` |
 | Injecté, en attente | `🎙️ « {texte} »\n\n⏳ Transmis à Hermes…` | — |
@@ -537,11 +537,11 @@ git add deploy/sandbox.md && git commit -m "ops: outils de l'agent Hermes isolé
 
 - [ ] **Step 1 : Recette sur le VPS avec le projet Todoist « Bot-test »**, en cochant chaque point dans le README
 
-1. Vocal → carte à 3 boutons → **Envoyer** → « ⏳ Transmis » puis « ✅ Reçu par Hermes » et réponse de Hermes.
+1. Vocal → carte à 3 boutons → **Discuter** → « ⏳ Transmis » puis « ✅ Reçu par Hermes » et réponse de Hermes.
 2. Vocal « ajoute acheter du pain demain dans Bot-test » → **Créer une tâche** → carte Todoist → **Valider** → tâche visible dans Todoist.
 3. Vocal → **Annuler** → Hermes ne reçoit rien.
 4. `/t acheter du lait vendredi` → carte Todoist.
-5. `/new` puis vocal → **Envoyer** → « Réponds ok » → `ok` → Hermes répond à la transcription.
+5. `/new` puis vocal → **Discuter** → « Réponds ok » → `ok` → Hermes répond à la transcription.
 6. « le pain c'est fait » → carte **Terminer** → Valider.
 7. Carte → **Modifier** → « plutôt samedi » → l'ancienne carte passe à « ↪️ Remplacé » et une nouvelle arrive.
 8. Double clic sur **Valider** → une seule tâche créée.
